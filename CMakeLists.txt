@@ -10,6 +10,8 @@ link_directories(/opt/homebrew/lib)
 include_directories(/usr/local/include)
 link_directories(/usr/local/lib)
 
+add_subdirectory(third_party)
+
 add_compile_options("-Wall" "-Wextra" "-Wno-unused-parameter")
 
 add_executable(
@@ -27,4 +29,5 @@ target_link_options(
 target_link_libraries(
         hysburg
         uv
+        picohttpparser
 )

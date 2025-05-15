@@ -49,7 +49,7 @@ class Future: public std::enable_shared_from_this<Future<T>> {
     volatile int mListenerId = 1;
 
     using ValueType = std::conditional_t<std::is_void_v<T>, std::monostate, T>;
-    ValueType mValue;
+    ValueType mValue {};
 
     void notifyListeners(std::vector<Tuple> listeners) noexcept {
         if (listeners.empty()) {

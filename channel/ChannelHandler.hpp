@@ -46,7 +46,7 @@ protected:
 //            mFactory = nullptr; // [1]
             // [1]. 事实上这个地方还不能删除，因为对于 ServerBootstrap，
             // childHandler 会在每个 channel 中调用，并不是只调用一次的。
-            // 但这样也带来一个潜在的内存泄漏问题，尤其是带捕获列表的 lambda 表达式。
+            // 但这样也带来一个 *可能* 的内存泄漏问题，尤其是带捕获列表的 lambda 表达式。
             ctx.channel().pipeline().remove(this);
         }
     }
@@ -68,9 +68,9 @@ private:
     bool mCallingDecode = false;
 
 protected:
-    virtual void decode(ChannelHandlerContext &ctx, ByteBuf &in, std::vector<AnyPtr> &out) = 0;
+    virtual void decode(ChannelHandlerContext &ctx, ByteBuf &in, std::vector<AnyPtr> &out) noexcept = 0;
 
-    virtual void callDecode(ChannelHandlerContext &ctx, ByteBuf &in, std::vector<AnyPtr> &out) {
+    virtual void callDecode(ChannelHandlerContext &ctx, ByteBuf &in, std::vector<AnyPtr> &out) noexcept {
         assert(!mCallingDecode);
         mCallingDecode = true;
         decode(ctx, in, out);
@@ -95,14 +95,12 @@ protected:
 
             if (mOutList.empty()) {
                 mByteBuff.readIndex(readIndex);
+                discardReadBytes(mByteBuff);
                 break;
             }
 
             // 解析出了数据，但 readIndex 没有变化，视为异常情况
             CHECK(mByteBuff.readIndex() != readIndex, "no bytes consumed but has data !")
-
-            // 移除掉已读数据
-            discardReadBytes(mByteBuff);
 
             for (auto &item: mOutList) {
                 ctx.fireChannelRead(std::move(item));
@@ -133,7 +131,7 @@ public:
 template <typename State>
 class ReplayingDecoder: public ByteToMessageDecoder {
     State mState;
-    int mCheckpoint = 0;
+    int mCheckpoint = -1;
     ByteBuf *mUsingByteBuf = nullptr;
 protected:
     State state() const noexcept { return mState; }
@@ -146,7 +144,7 @@ protected:
         mState = state;
     }
 
-    void callDecode(ChannelHandlerContext &ctx, ByteBuf &in, std::vector<AnyPtr> &out) override {
+    void callDecode(ChannelHandlerContext &ctx, ByteBuf &in, std::vector<AnyPtr> &out) noexcept override {
         assert(mUsingByteBuf == nullptr);
         mUsingByteBuf = &in;
 
@@ -262,7 +260,7 @@ protected:
         CHECK(mInboundHandler == nullptr && mOutboundHandler == nullptr, "duplicated call")
         CHECK(in != nullptr && out != nullptr, "nullptr in='%p', out='%p'", in.get(), out.get())
 
-        CHECK(in->isOutbounds(), "'%p' is NOT inbounds handler", in.get())
+        CHECK(in->isInbounds(), "'%p' is NOT inbounds handler", in.get())
         CHECK(out->isOutbounds(), "'%p' is NOT outbounds handler", out.get())
 
         mInboundHandler = std::move(in);
@@ -363,7 +361,7 @@ protected:
         return isType<MsgType>(msg);
     }
 
-    virtual void channelRead0(ChannelHandlerContext &ctx, MsgType &msg) = 0;
+    virtual void channelRead0(ChannelHandlerContext &ctx, MsgType &msg) noexcept = 0;
 
     void channelRead(ChannelHandlerContext &ctx, AnyPtr msg) noexcept override
     {

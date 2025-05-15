@@ -261,6 +261,9 @@ public:
     [[nodiscard]]
     ChannelPipeline &pipeline() const noexcept;
 
+    template<typename T>
+    PromisePtr<T> newPromise() noexcept;
+
     [[nodiscard]]
     bool isRemoved() const noexcept { return mAddedCount <= 0; }
 
@@ -845,6 +848,12 @@ public:
             });
         }
         return *this;
+    }
+
+    template<typename E, typename ...Args>
+    ServerBootstrap &emplaceChildHandler(Args&&... args) noexcept {
+        auto handler = std::make_shared<E>(std::forward<Args>(args)...);
+        return childHandler(std::move(handler));
     }
 
     ServerBootstrap &childHandler(ChannelHandlerPtr childHandler) noexcept {

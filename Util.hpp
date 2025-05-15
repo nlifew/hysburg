@@ -9,7 +9,6 @@
 #include <arpa/inet.h>
 
 #include "Log.hpp"
-#include "third_party/cpp-base64/base64.h"
 
 #define NO_COPY(X) \
     X(const X &) = delete; \
@@ -275,14 +274,14 @@ struct Strings
     }
 
 
-    static std::string randomString(size_t len) noexcept
-    {
-        std::vector<unsigned char> vec(len / 4 * 3 + 4);
-        Numbers::writeRandom(vec.data(), vec.size());
-        auto ret = base64_encode(vec.data(), vec.size());
-        ret.resize(len);
-        return ret;
-    }
+//    static std::string randomString(size_t len) noexcept
+//    {
+//        std::vector<unsigned char> vec(len / 4 * 3 + 4);
+//        Numbers::writeRandom(vec.data(), vec.size());
+//        auto ret = base64_encode(vec.data(), vec.size());
+//        ret.resize(len);
+//        return ret;
+//    }
 
     static int toInt(const std::string &s) noexcept
     {

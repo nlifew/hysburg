@@ -4,9 +4,16 @@
 
 using namespace hysburg;
 
+
+template<typename T>
+PromisePtr<T> ChannelHandlerContext::newPromise() noexcept {
+    return channel().newPromise<T>();
+}
+
 ChannelPipeline &ChannelHandlerContext::pipeline() const noexcept {
     return channel().pipeline();
 }
+
 
 void ChannelHandler::channelActive(ChannelHandlerContext &ctx) noexcept {
     ctx.fireChannelActive();
