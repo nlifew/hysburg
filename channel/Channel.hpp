@@ -831,7 +831,7 @@ public:
         return *this;
     }
 
-    ServerBootstrap &eventLoopGroup(const EventLoopGroupPtr &group) noexcept {
+    ServerBootstrap &eventLoop(const EventLoopGroupPtr &group) noexcept {
         return eventLoop(group->next());
     }
 

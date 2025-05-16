@@ -35,19 +35,29 @@ class UVSocketChannel: public Channel
 
         // 开始读
         int result = uv_read_start((uv_stream_t *) &mTcp, [](uv_handle_t *, size_t suggestedSize, uv_buf_t *buf) {
-            buf->base = new char[suggestedSize];
+            buf->base = (char *) ByteBuf::Allocator().alloc(suggestedSize);
             buf->len = suggestedSize;
         }, [](uv_stream_t *handle, ssize_t nread, const uv_buf_t *buf) {
             auto self = static_cast<UVSocketChannel*>(handle->data);
-            if (nread < 0) {
-                self->doClose();
+            std::unique_ptr<uint8_t, void(*)(uint8_t *)> ptr(
+                    reinterpret_cast<uint8_t*>(buf->base),
+                    [](uint8_t *ptr) { ByteBuf::Allocator().free(ptr); }
+            );
+            if (LIKELY(nread > 0)) {
+                auto msg = makeAny<ByteBuf>();
+                auto byteBuf = msg->as<ByteBuf>();
+                byteBuf->grab(ptr.release(), buf->len);
+                byteBuf->writeIndex(nread);
+                self->pipeline().fireChannelRead(std::move(msg));
                 return ;
             }
-            std::unique_ptr<uint8_t> ptr(reinterpret_cast<uint8_t*>(buf->base));
-            auto msg = makeAny<ByteBuf>(std::move(ptr), buf->len);
-            auto byteBuf = msg->as<ByteBuf>();
-            byteBuf->writeIndex(nread);
-            self->pipeline().fireChannelRead(std::move(msg));
+            if (nread == UV_EOF) {
+                // 对面已经关闭了对面的写端，此时这个 channel 仍然可以认为是活跃的
+                return;
+            }
+            if (nread < 0) {
+                self->doClose();
+            }
         });
 
         if (result != 0) {

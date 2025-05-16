@@ -10,6 +10,27 @@ namespace hysburg
 
 class ByteBuf
 {
+public:
+    struct Allocator {
+        [[nodiscard]]
+        uint8_t *alloc(size_t size) const noexcept {
+            (void) this;
+            return static_cast<uint8_t*>(::malloc(size));
+        }
+
+        [[nodiscard]]
+        uint8_t *realloc(uint8_t *old, size_t size) const noexcept {
+            (void) this;
+            return static_cast<uint8_t*>(::realloc(old, size));
+        }
+
+        void free(uint8_t *ptr) const noexcept {
+            (void) this;
+            ::free(ptr);
+        }
+    };
+
+private:
     uint8_t *mData = nullptr;
     size_t mCapacity = 0;
     size_t mReadIndex = 0;
@@ -36,7 +57,7 @@ class ByteBuf
             newCapacity = std::max(newCapacity, targetWriteIndex);
             newCapacity = std::max(newCapacity, 256lu);
 //            newCapacity = Numbers::align<16>(newCapacity);
-            mData = static_cast<uint8_t *>(realloc(mData, newCapacity));
+            mData = Allocator().realloc(mData, newCapacity);
             mCapacity = newCapacity;
         }
     }
@@ -52,18 +73,14 @@ class ByteBuf
 public:
     explicit ByteBuf() noexcept = default;
 
-    explicit ByteBuf(size_t capacity) noexcept:
-            mData(static_cast<uint8_t *>(malloc(capacity))),
-            mCapacity(capacity) {
-    }
-
-    explicit ByteBuf(std::unique_ptr<uint8_t> buf, size_t capacity) noexcept:
-            mData(buf.release()), mCapacity(capacity) {
+    explicit ByteBuf(size_t capacity) noexcept {
+        mCapacity = capacity;
+        mData = Allocator().alloc(capacity);
     }
 
     NO_COPY(ByteBuf);
 
-    ~ByteBuf() noexcept { free(mData); }
+    ~ByteBuf() noexcept { Allocator().free(mData); }
 
     uint8_t readByte() noexcept { return readInteger<int8_t>(); }
     uint16_t readShort() noexcept { return readInteger<int16_t>(); }
@@ -128,6 +145,13 @@ public:
     size_t writableBytes() const noexcept { return mCapacity - mWriteIndex; }
 
 //    bool empty() const noexcept { return mSize == 0; }
+
+    void grab(uint8_t *data, size_t capacity) noexcept {
+        Allocator().free(mData);
+        mData = data;
+        mCapacity = capacity;
+        mReadIndex = mWriteIndex = 0;
+    }
 
     void readIndex(size_t index) noexcept { mReadIndex = index; }
     void writeIndex(size_t index) noexcept { mWriteIndex = index; }
