@@ -10,14 +10,25 @@ link_directories(/opt/homebrew/lib)
 include_directories(/usr/local/include)
 link_directories(/usr/local/lib)
 
-add_subdirectory(third_party)
+add_subdirectory(test)
 
+add_subdirectory(third_party)
 add_compile_options("-Wall" "-Wextra" "-Wno-unused-parameter")
+
+add_library(
+        runtime
+        STATIC
+        channel/Channel.cpp
+)
+target_link_libraries(
+        runtime
+        uv
+        llhttp_static
+)
 
 add_executable(
         hysburg
         main2.cpp
-        channel/Channel.cpp
 )
 
 target_link_options(
@@ -28,6 +39,5 @@ target_link_options(
 
 target_link_libraries(
         hysburg
-        uv
-        picohttpparser
+        runtime
 )

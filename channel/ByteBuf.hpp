@@ -109,14 +109,6 @@ public:
         writeBytes(str.data(), str.size());
     }
 
-    void transferFrom(ByteBuf &src) noexcept {
-        if (readableBytes() == 0) {
-            swap(src);
-        } else {
-            writeBytes(src.data() + src.readIndex(), src.readableBytes());
-            src.clear();
-        }
-    }
 
     void discardReadBytes() noexcept {
         memmove(mData, mData + mReadIndex, readableBytes());

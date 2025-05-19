@@ -2,175 +2,440 @@
 #define HYSBURG_CHANNEL_HTTP_OBJECT
 
 #include <string>
-#include <map>
+#include <vector>
+#include <llhttp.h>
 
 #include "ChannelHandler.hpp"
-#include "third_party/picohttpparser/picohttpparser.h"
 
 namespace hysburg
 {
 
-struct HttpObject
+class HttpObject
 {
-    bool isSuccess = true;
-    std::map<std::string, std::string> headers;
-    std::string body;
-};
+    template<typename, llhttp_type_t>
+    friend class HttpObjectDecoder;
 
-struct HttpRequest: public HttpObject
-{
-    std::string path = "/";
-    std::string method = "GET";
-};
+protected:
+    static constexpr size_t INVALID_OFFSET = (size_t) -1;
 
-struct HttpResponse: public HttpObject
-{
-// 定义宏，用于生成枚举项和消息映射
-#define HTTP_STATUS_CODES(XX) \
-    XX(200, OK, "OK") \
-    XX(400, BAD_REQUEST, "Bad Request") \
-    XX(403, FORBIDDEN, "Forbidden") \
-    XX(404, NOT_FOUND, "Not Found") \
-    XX(405, METHOD_NOT_ALLOWED, "Method Not Allowed")
+    struct StringRef {
+        size_t off = INVALID_OFFSET;
+        size_t len = 0;
 
-    // 状态码定义
-    using HttpCode = uint32_t;
+        [[nodiscard]]
+        std::string_view get(const ByteBuf &buf) const noexcept {
+            return off == INVALID_OFFSET ?
+                std::string_view {  } :
+                std::string_view { (const char*) buf.data() + off, len };
+        }
+    };
 
-#define XX(num, name, string) static constexpr HttpCode CODE_##name = num;
-    HTTP_STATUS_CODES(XX)
-#undef XX
+    static void trimKey(const StringRef &str, ByteBuf &buf) noexcept {
+        trimKey(str, (char*) buf.data());
+    }
+    static void trimKey(const StringRef &str, char *buf) noexcept {
+        auto data = buf + str.off;
+        for (size_t i = 0; i < str.len; i ++) {
+            data[i] = (char) std::tolower(data[i]);
+        }
+    }
 
-    uint32_t code = CODE_OK;
+    using Header = std::pair<StringRef, StringRef>;
+
+    ByteBuf mRaw;
+    bool mSuccess = true;
+    std::vector<Header> mHeaders;
+    StringRef mBody;
 
     [[nodiscard]]
-    const char *message() const noexcept { return getMessageByCode(code); }
+    bool ownThisString(const std::string_view &str) const noexcept {
+        auto from = (char *) mRaw.data();
+        auto to = (char *) mRaw.data() + mRaw.writeIndex();
+        return from <= str.data() && str.data() <= to;
+    }
 
-    static const char *getMessageByCode(HttpCode code)
-    {
-        switch (code) {
-#define XX(num, name, string) case num: return string;
-            HTTP_STATUS_CODES(XX)
-#undef XX
-            default:
-                LOGI("unknown response code: %d", code);
+    [[nodiscard]]
+    StringRef update(const StringRef &oldValue, const std::string_view &newValue) noexcept {
+        // FIXME 优化
+//        if (ownThisString(oldValue) && oldValue.size() >= newValue.size()) {
+//            // 备份当前 wIndex
+//            auto wIndex = mRaw.writeIndex();
+//            // 移动指针，跳转到 oldValue 的位置
+//            mRaw.writeIndex(oldValue.data() - (char *) mRaw.data());
+//            // 写入二进制数据
+//            mRaw.writeBytes(newValue);
+//            // 还原 wIndex
+//            mRaw.writeIndex(wIndex);
+//            // 可以返回了
+//            return { oldValue.data(), newValue.size() };
+//        }
+//
+        // 直接在后面插入
+        auto off = mRaw.writeIndex();
+        mRaw.writeBytes(newValue);
+        return { off, newValue.size() };
+    }
+public:
+    virtual ~HttpObject() noexcept = default;
+
+    std::string_view header(const std::string_view &name) noexcept {
+        auto it = std::find_if(mHeaders.begin(), mHeaders.end(), [&name, this](Header &it) -> bool {
+            return name == it.first.get(mRaw);
+        });
+        return it->second.get(mRaw);
+    }
+
+    std::vector<std::pair<std::string_view, std::string_view>> headers() noexcept {
+        std::vector<std::pair<std::string_view, std::string_view>> vec(mHeaders.size());
+        for (size_t i = 0; i < mHeaders.size(); i ++) {
+            auto &header = mHeaders[i];
+            vec[i] = std::make_pair(header.first.get(mRaw), header.second.get(mRaw));
         }
-        return "";
+        return vec;
+    }
+
+    void header(const std::string_view &name, const std::string_view &value) noexcept {
+        auto it = std::find_if(mHeaders.begin(), mHeaders.end(), [&name, this](Header &it) -> bool {
+            return name == it.first.get(mRaw);
+        });
+        if (it != mHeaders.end()) {
+            it->second = update(it->second, value);
+            return;
+        }
+        auto newName = update(StringRef(), name);
+        trimKey(newName, mRaw);
+
+        mHeaders.emplace_back(newName, update(StringRef(), value));
+    }
+
+    [[nodiscard]]
+    bool isSuccess() const noexcept { return mSuccess; }
+
+    std::string_view body() noexcept { return mBody.get(mRaw); }
+
+    void body(const std::string_view &newBody) noexcept {
+        mBody = update(mBody, newBody);
     }
 };
+
+class HttpRequest: public HttpObject
+{
+private:
+    friend class HttpRequestDecoder;
+    StringRef mPath;
+    StringRef mMethod;
+public:
+    void path(const std::string_view &newPath) noexcept {
+        mPath = update(mPath, newPath);
+    }
+
+    void method(const std::string_view &newMethod) noexcept {
+        mMethod = update(mMethod, newMethod);
+    }
+
+    std::string_view path() noexcept { return mPath.get(mRaw); }
+    std::string_view method() noexcept { return mMethod.get(mRaw); }
+};
+
+class HttpResponse: public HttpObject
+{
+    friend class HttpResponseDecoder;
+public:
+    // 状态码定义
+    using HttpCode = llhttp_status_t;
+
+private:
+    HttpCode mCode = HttpCode::HTTP_STATUS_OK;
+    StringRef mMessage;
+
+public:
+    explicit HttpResponse() noexcept {
+        message("OK");
+    }
+
+    [[nodiscard]]
+    std::string_view message() const noexcept { return getMessageByCode(mCode); }
+
+    static std::string_view getMessageByCode(HttpCode code) {
+        return llhttp_status_name(code);
+    }
+
+    [[nodiscard]]
+    HttpCode code() const noexcept { return mCode; }
+
+    void code(HttpCode newCode) noexcept { mCode = newCode; }
+
+    [[nodiscard]]
+    std::string_view message() noexcept { return mMessage.get(mRaw); }
+
+    void message(const std::string_view &newMessage) noexcept {
+        mMessage = update(mMessage, newMessage);
+    }
+};
+
 
 /**
  * [HttpObject] 解析器，会向下游抛出 [HttpObjectType] 类型
  */
-template <typename HttpObjectType>
-class HttpObjectDecoder: public ReplayingDecoder<int>
+template <typename HttpObjectType, llhttp_type_t HttpParserType>
+class HttpObjectDecoder: public ByteToMessageDecoder
 {
-    using Super = ReplayingDecoder<int>;
-    AnyPtr mHttpObject;
+protected:
+    using StringRef = HttpObject::StringRef;
+    static constexpr size_t INVALID_OFFSET = HttpObject::INVALID_OFFSET;
+
+    size_t offsetOfData(const char *at) const noexcept {
+        assert(mData != nullptr);
+        return at - mData;
+    }
+
+    void updateString(StringRef &out, const char *at, size_t length) const noexcept {
+        auto offset = offsetOfData(at);
+        // 可能读到不完整的片段
+        if (out.off == INVALID_OFFSET) {
+            out.off = offset;
+            out.len = length;
+            return;
+        }
+        assert(out.off + out.len == offset);
+        out.len += length;
+    }
+
+private:
+    /**
+     * headers、body 等都用偏移量记录。因为 ByteBuf 扩容过程中可能
+     * 会改变 data 指针，这会导致指针悬垂，成为隐患
+     */
+    std::vector<std::pair<StringRef, StringRef>> mHeaders;
+    StringRef mBody;
+    StringRef mCurHeaderName;
+    StringRef mCurHeaderValue;
+    size_t mLastDecodedBytes = 0;
+    char *mData = nullptr;
+    bool mFirstUpgrade = true;
+
+private:
+    int on_message_begin() noexcept {
+        mCurHeaderName = {};
+        mCurHeaderValue = {};
+        mBody = {};
+        mHeaders.clear();
+        assert(mData != nullptr);
+        return 0;
+    }
+
+    int on_header_field(const char *at, size_t length) noexcept {
+        if (mHeaders.size() > maxHeaderNum) {
+            llhttp_set_error_reason(&mHttpParser, "access max header num");
+            return -1;
+        }
+        if (!mHeaders.empty()) {
+            size_t offset = offsetOfData(at);
+            auto firstOffset = mHeaders[0].first.off;
+            if (offset - firstOffset + length > maxHeaderSize) {
+                llhttp_set_error_reason(&mHttpParser, "access max header size");
+                return -1;
+            }
+        }
+        // 可能读到不完整的片段
+        updateString(mCurHeaderName, at, length);
+        return 0;
+    }
+
+    int on_header_value(const char *at, size_t length) noexcept {
+        if (!mHeaders.empty()) {
+            size_t offset = offsetOfData(at);
+            auto firstOffset = mHeaders[0].first.off;
+            if (offset - firstOffset + length > maxHeaderSize) {
+                llhttp_set_error_reason(&mHttpParser, "access max header size");
+                return -1;
+            }
+        }
+        updateString(mCurHeaderValue, at, length);
+        return 0;
+    }
+
+    /**
+     * 把当前 header 提交到 vector
+     */
+    int on_header_value_complete() noexcept {
+        mHeaders.emplace_back(mCurHeaderName, mCurHeaderValue);
+        mCurHeaderName = {};
+        mCurHeaderValue = {};
+        return 0;
+    }
+
+    int on_headers_complete() noexcept {
+        if (mHttpParser.content_length > maxBodySize) {
+            llhttp_set_error_reason(&mHttpParser, "access max body size");
+            return -1;
+        }
+        for (auto &it : mHeaders) {
+            HttpObject::trimKey(it.first, mData);
+        }
+        if (llhttp_get_upgrade(&mHttpParser)) {
+            return 2;
+        }
+        return 0;
+    }
+
+    int on_body(const char *at, size_t length) noexcept {
+        updateString(mBody, at, length);
+        return 0;
+    }
+
+    /**
+     * 当 http 消息解析完成的时候立即暂停 [HPE_PAUSED]，用来在 [llhttp_execute] 中快速返回。
+     * 返回 HPE_PAUSED 的原因有以下几点：
+     * 1. 消息可能有粘连，即一个 ByteBuf 中含有多个 http 请求。我们需要在解析完一个的时候及时暂停
+     * 2. 得知当前解析器的 cursor 在哪 [llhttp_get_error_pos]，用来调整 ByteBuf 的指针
+     */
+    int on_message_complete() noexcept {
+        if (llhttp_get_upgrade(&mHttpParser)) {
+            return HPE_OK;
+        }
+        return HPE_PAUSED;
+    }
+
+#define LLHTTP_METHOD_BRIDGE(XX) \
+    XX(on_message_begin)  \
+    XX(on_message_complete) \
+    XX(on_header_value_complete) \
+    XX(on_headers_complete)
+
+#define LLHTTP_DATA_METHOD_BRIDGE(XX) \
+    XX(on_header_field) \
+    XX(on_header_value) \
+    XX(on_body)
+
+    void initSettings() noexcept {
+        llhttp_settings_init(&mSettings);
+#define XX(NAME) \
+        mSettings.NAME = [](llhttp_t *parser) -> int { \
+            auto self = static_cast<HttpObjectDecoder*>(parser->data); \
+            return self->NAME(); \
+        };
+            LLHTTP_METHOD_BRIDGE(XX)
+#undef XX
+#define XX(NAME) \
+        mSettings.NAME = [](llhttp_t *parser, const char *at, size_t length) -> int { \
+            auto self = static_cast<HttpObjectDecoder*>(parser->data); \
+            return self->NAME(at, length); \
+        };
+            LLHTTP_DATA_METHOD_BRIDGE(XX)
+#undef XX
+        }
+
+#undef LLHTTP_METHOD_BRIDGE
+#undef LLHTTP_DATA_METHOD_BRIDGE
+
+    llhttp_errno_t decode0(ChannelHandlerContext &ctx, ByteBuf &in) noexcept {
+        // mData 指向数据开始的指针
+        mData = (char *) in.readData();
+        auto err = llhttp_execute(
+                &mHttpParser,
+                (char *) in.readData() + mLastDecodedBytes, // [1]
+                in.readableBytes() - mLastDecodedBytes // [1]
+        );
+        mData = nullptr;
+        // [1]. 如果 llhttp 上次解析到一半缓冲区就耗尽了，下次应该从结束的地方开始而不是从头开始
+
+        auto errMsg = llhttp_get_error_reason(&mHttpParser);
+        LOGE("decode result '%d(%s)' from '%s'",
+             err, errMsg,ctx.channel().remoteAddrString().c_str()
+        );
+        return err;
+    }
+
+    void complete0(ByteBuf &byteBuf, std::vector<AnyPtr> &out) noexcept {
+        // 现在指针的位置
+        auto pos = llhttp_get_error_pos(&mHttpParser);
+        // 整个对象的大小
+        size_t httpObjectSize = pos - (char *) byteBuf.readData();
+
+        // 把当前 byteBuf 拆分：pos 及之前的内容给 httpObject，之后的部分继续保留
+        auto httpObjectMsg = makeAny<HttpObjectType>();
+        auto httpObject = httpObjectMsg->template as<HttpObjectType>();
+        if (byteBuf.readableBytes() == httpObjectSize) {
+            httpObject->mRaw.swap(byteBuf);
+        } else {
+            httpObject->mRaw.writeBytes(byteBuf.readData(), httpObjectSize);
+            byteBuf.readIndex(byteBuf.readIndex() + httpObjectSize);
+            byteBuf.discardReadBytes();
+        }
+
+        // 把临时对象都塞进 http 对象里
+        updateHttpObject(*httpObject);
+
+        // 解析完成
+        out.emplace_back(std::move(httpObjectMsg));
+
+        // 还原状态，准备进行下一轮解析
+        llhttp_resume(&mHttpParser);
+        llhttp_set_error_reason(&mHttpParser, "");
+        mLastDecodedBytes = 0;
+    }
+
+    void upgrade0(ByteBuf &byteBuf, std::vector<AnyPtr> &out) {
+        // 消费掉 http 请求头部分
+        if (mFirstUpgrade) {
+            mFirstUpgrade = false;
+            complete0(byteBuf, out);
+            return;
+        }
+        // 直接抛出所有的字节
+        auto tmp = makeAny<ByteBuf>();
+        tmp->as<ByteBuf>()->swap(byteBuf);
+        out.emplace_back(std::move(tmp));
+    }
+
+    void error0(ByteBuf &byteBuf, std::vector<AnyPtr> &out) {
+        // 消费掉所有的内容，失败
+        byteBuf.readIndex(byteBuf.writeIndex());
+        auto tmp = makeAny<HttpObjectType>();
+        tmp->template as<HttpObjectType>()->mSuccess = false;
+        out.emplace_back(std::move(tmp));
+    }
 
 protected:
-    enum State
-    {
-        DECODE_HEADER = 1,
-        DECODE_BODY = 2,
-        DECODE_DONE = 3,
-        DECODE_ERROR = -1,
-    };
-    enum Errno
-    {
-        FAILURE = -1,
-        CONTINUE = -2,
-        TOO_LARGE_HEADER = -3,
-        TOO_LARGE_BODY = -4,
-        INVALID_VERSION = -5,
-    };
+    llhttp_t mHttpParser {};
+    llhttp_settings_t mSettings {};
 
-    size_t mLastBuffLen = 0;
-
-    static std::string &trimKey(std::string &key)
-    {
-        for (auto &c : key) {
-            c = (char) std::tolower(c);
-        }
-        return key;
+    virtual void initParser() noexcept {
+        initSettings();
+        llhttp_init(&mHttpParser, HttpParserType, &mSettings);
+        llhttp_set_lenient_optional_cr_before_lf(&mHttpParser, 1);
+        mHttpParser.data = this;
     }
 
-    static void setHeaders(HttpObject &out, const phr_header *headerArray, size_t headerArrayLen)
-    {
-        out.headers.clear();
-        for (size_t i = 0; i < headerArrayLen; ++i) {
-            std::string key(headerArray[i].name, headerArray[i].name_len);
-            trimKey(key);
-            out.headers.emplace(std::move(key), std::string(headerArray[i].value, headerArray[i].value_len));
-        }
+    virtual void updateHttpObject(HttpObjectType &httpObject) noexcept {
+        std::swap(httpObject.mHeaders, mHeaders);
+        std::swap(httpObject.mBody, mBody);
     }
-
-    virtual ssize_t decodeHeader(ChannelHandlerContext &ctx, ByteBuf &in, HttpObjectType &out) noexcept = 0;
-
-    virtual ssize_t decodeBody(ChannelHandlerContext &, ByteBuf &in, HttpObjectType &out) noexcept
-    {
-        // 只支持 Content-Length，不支持 chunk 编码
-        // 使用 std::map.find() 不污染原始请求头
-        size_t contentLength = 0;
-        {
-            const auto it = out.headers.find("content-length");
-            if (it != out.headers.end()) {
-                contentLength = (size_t) Strings::toInt(it->second);
-            }
-        }
-        if (contentLength > maxBodySize) {
-            return TOO_LARGE_BODY;
-        }
-        if (in.readableBytes() < contentLength) {
-            return CONTINUE;
-        }
-        out.body.resize(contentLength);
-        in.readBytes(out.body.data(), contentLength);
-        return (ssize_t) contentLength;
-    }
+public: // visible for test
 
     void decode(ChannelHandlerContext &ctx, ByteBuf &in, std::vector<AnyPtr> &out) noexcept override {
-        switch ((State) state()) {
-            case DECODE_HEADER: {
-                if (mHttpObject == nullptr) {
-                    mHttpObject = makeAny<HttpObjectType>();
-                }
-                ssize_t ret = decodeHeader(ctx, in, *mHttpObject->as<HttpObjectType>());
-                if (ret == CONTINUE) {
-                    break;
-                }
-                if (ret < 0) {
-                    state(State::DECODE_ERROR);
-                    break;
-                }
-                in.readIndex(in.readIndex() + ret);
-                checkpoint(State::DECODE_BODY);
-                [[fallthrough]];
-            }
-            case DECODE_BODY: {
-                ssize_t ret = decodeBody(ctx, in, *mHttpObject->as<HttpObjectType>());
-                if (ret == CONTINUE) {
-                    break;
-                }
-                if (ret < 0) {
-                    state(State::DECODE_ERROR);
-                    break;
-                }
-                checkpoint(State::DECODE_DONE);
-                [[fallthrough]];
-            }
-            case DECODE_DONE: {
-                mLastBuffLen = 0;
-                out.emplace_back(std::move(mHttpObject));
-                checkpoint(State::DECODE_HEADER);
-                break;
-            }
-            default: break;
+        if (mHttpParser.settings == nullptr) {
+            initParser();
         }
-        if (state() == State::DECODE_ERROR) {
-            // 失败，消费掉所有的内容，防止死循环和 assert 异常
-            mHttpObject->as<HttpObjectType>()->isSuccess = false;
-            in.readIndex(in.writeIndex());
-            out.emplace_back(std::move(mHttpObject));
+        auto err = decode0(ctx, in);
+        switch (err) {
+            // 如果消息还不完整，等待下一条消息到来
+            case HPE_OK:
+                mLastDecodedBytes = in.readableBytes();
+                break;
+            // 如果成功读完了一条消息，解析这条消息
+            case HPE_PAUSED:
+                complete0(in, out);
+                break;
+            // 协议升级
+            case HPE_PAUSED_UPGRADE:
+                upgrade0(in, out);
+                break;
+            // 其余认为是失败
+            default:
+                error0(in, out);
+                break;
         }
     }
 
@@ -183,109 +448,72 @@ public:
     size_t maxHeaderNum = DEFAULT_MAX_HEADER_NUM;
     size_t maxBodySize = DEFAULT_MAX_BODY_SIZE;
 
-    explicit HttpObjectDecoder() noexcept: Super(State::DECODE_HEADER) {
-    }
+    explicit HttpObjectDecoder() noexcept = default;
     NO_COPY(HttpObjectDecoder)
 };
 
 
-class HttpRequestDecoder: public HttpObjectDecoder<HttpRequest>
+class HttpRequestDecoder: public HttpObjectDecoder<HttpRequest, HTTP_REQUEST>
 {
-protected:
-    ssize_t decodeHeader(ChannelHandlerContext &, ByteBuf &in, HttpRequest &out) noexcept override
-    {
-        const char *methodString = ""; size_t methodStringLen = 0;
-        const char *pathString = ""; size_t pathStringLen = 0;
-        int minorVersion = 0;
+    StringRef mPath;
+    StringRef mMethod;
 
-        std::vector<phr_header> headerArray(maxHeaderNum);
-        size_t headerArrayLen = maxHeaderNum;
-
-        size_t readIndex = in.readIndex();
-        size_t availableBytes = std::min(in.readableBytes(), maxHeaderSize);
-
-        int ret = phr_parse_request(
-                (char *) in.data() + in.readIndex(),
-                availableBytes,
-                &methodString, &methodStringLen,
-                &pathString, &pathStringLen,
-                &minorVersion,
-                headerArray.data(), &headerArrayLen,
-                mLastBuffLen);
-        mLastBuffLen = availableBytes;
-
-        if (ret == -1) {
-            // 有错误直接返回
-            return FAILURE;
-        }
-        if (ret == -2) {
-            // 需要更多数据
-            if (in.readIndex() - readIndex >= maxHeaderSize) {
-                // 超出了最大请求头长度，直接返回
-                return TOO_LARGE_HEADER;
-            }
-            return CONTINUE;
-        }
-        // 检查支持的版本
-        if (minorVersion != 1) {
-            return INVALID_VERSION;
-        }
-        // 规范化字段
-        out.method.assign(methodString, methodStringLen);
-        Strings::unsafeToUpper(out.method.data(), out.method.size());
-
-        out.path.assign(pathString, pathStringLen);
-        setHeaders(out, headerArray.data(), headerArrayLen);
-        return ret;
+    int on_url(const char *at, size_t length) noexcept {
+        updateString(mPath, at, length);
+        return 0;
     }
+
+    int on_method(const char *at, size_t len) noexcept {
+        updateString(mMethod, at, len);
+        return 0;
+    }
+
+protected:
+    void initParser() noexcept override {
+        HttpObjectDecoder::initParser();
+
+        mSettings.on_method = [](llhttp_t *parser, const char *at, size_t len) noexcept -> int  {
+            auto self = static_cast<HttpRequestDecoder*>(parser->data);
+            return self->on_method(at, len);
+        };
+        mSettings.on_url = [](llhttp_t *parser, const char *at, size_t len) noexcept -> int  {
+            auto self = static_cast<HttpRequestDecoder*>(parser->data);
+            return self->on_url(at, len);
+        };
+    }
+
+    void updateHttpObject(HttpRequest &httpObject) noexcept override {
+        HttpObjectDecoder::updateHttpObject(httpObject);
+        std::swap(mPath, httpObject.mPath);
+        std::swap(mMethod, httpObject.mMethod);
+    }
+
+public:
+    explicit HttpRequestDecoder() noexcept = default;
+    NO_COPY(HttpRequestDecoder)
 };
 
-class HttpResponseDecoder: public HttpObjectDecoder<HttpResponse>
+class HttpResponseDecoder: public HttpObjectDecoder<HttpResponse, HTTP_RESPONSE>
 {
+    StringRef mMessage;
+
+    int on_status(const char *at, size_t length) noexcept {
+        updateString(mMessage, at, length);
+        return 0;
+    }
+
 protected:
-    ssize_t decodeHeader(ChannelHandlerContext &, ByteBuf &in, HttpResponse &out) noexcept override
-    {
-        const char *msgString = "";
-        size_t msgStringLen = 0;
-        int minorVersion = 0;
+    void initParser() noexcept override {
+        HttpObjectDecoder::initParser();
+        mSettings.on_status = [](llhttp_t *parser, const char *at, size_t length) -> int {
+            auto self = static_cast<HttpResponseDecoder*>(parser->data);
+            return self->on_status(at, length);
+        };
+    }
 
-        std::vector<phr_header> headerArray(maxHeaderNum);
-        size_t headerArrayLen = maxHeaderNum;
-
-        size_t readIndex = in.readIndex();
-        size_t availableBytes = std::min(in.readableBytes(), maxHeaderSize);
-
-        int ret = phr_parse_response(
-                (char *) in.data() + in.readIndex(),
-                availableBytes, &minorVersion,
-                (int *) &out.code, &msgString, &msgStringLen,
-                headerArray.data(), &headerArrayLen, mLastBuffLen);
-        mLastBuffLen = availableBytes;
-
-        if (ret == -1) {
-            return FAILURE;
-        }
-        if (ret == -2) {
-            // 需要更多数据
-            if (in.readIndex() - readIndex >= maxHeaderSize) {
-                // 超出了最大请求头长度，直接返回
-                return TOO_LARGE_HEADER;
-            }
-            return CONTINUE;
-        }
-
-        // 检查支持的版本
-        if (minorVersion != 1) {
-            return INVALID_VERSION;
-        }
-        // 检查 msg 是否符合
-//        std::string msg(msgString, msgStringLen);
-//        if (strcasecmp(msg.data(), HttpResponse::getMessageByCode(out.code)) != 0) {
-//            return FAILURE;
-//        }
-        // 请求头
-        setHeaders(out, headerArray.data(), headerArrayLen);
-        return ret;
+    void updateHttpObject(hysburg::HttpResponse &httpObject) noexcept override {
+        HttpObjectDecoder::updateHttpObject(httpObject);
+        std::swap(httpObject.mMessage, mMessage);
     }
 };
 
@@ -293,20 +521,23 @@ template <typename HttpObjectType>
 class HttpObjectEncoder: public MessageToByteEncoder<HttpObjectType>
 {
 protected:
-    virtual void writeStatusLine(ChannelHandlerContext &, HttpObjectType &msg, ByteBuf &out) noexcept = 0;
-
     void encode(ChannelHandlerContext &ctx, HttpObjectType &msg, ByteBuf &out) noexcept override
     {
-        writeStatusLine(ctx, msg, out);
-        msg.headers["content-length"] = std::to_string(msg.body.size());
-        for (const auto &it : msg.headers) {
+        auto body = msg.body();
+        auto expectedContentLength = std::to_string(body.length());
+        auto actuallyContentLength = msg.header("content-length");
+
+        if (expectedContentLength != actuallyContentLength) {
+            msg.header("content-length", expectedContentLength);
+        }
+        for (const auto &it : msg.headers()) {
             out.writeBytes(it.first);
             out.writeBytes(": ");
             out.writeBytes(it.second);
             out.writeBytes("\r\n");
         }
         out.writeBytes("\r\n");
-        out.writeBytes(msg.body.data(), msg.body.size());
+        out.writeBytes(body.data(), body.length());
     }
 };
 
@@ -314,25 +545,25 @@ protected:
 class HttpRequestEncoder: public HttpObjectEncoder<HttpRequest>
 {
 protected:
-    void writeStatusLine(ChannelHandlerContext &, HttpRequest &msg, ByteBuf &out) noexcept override
-    {
-        out.writeBytes(msg.method);
+    void encode(ChannelHandlerContext &ctx, HttpRequest &msg, ByteBuf &out) noexcept override {
+        out.writeBytes(msg.method());
         out.writeBytes(" ");
-        out.writeBytes(msg.path);
+        out.writeBytes(msg.path());
         out.writeBytes(" HTTP/1.1\r\n");
+        HttpObjectEncoder::encode(ctx, msg, out);
     }
 };
 
 class HttpResponseEncoder: public HttpObjectEncoder<HttpResponse>
 {
 protected:
-    void writeStatusLine(ChannelHandlerContext &, HttpResponse &msg, ByteBuf &out) noexcept override
-    {
+    void encode(hysburg::ChannelHandlerContext &ctx, hysburg::HttpResponse &msg, hysburg::ByteBuf &out) noexcept override {
         out.writeBytes("HTTP/1.1 ");
-        out.writeBytes(std::to_string(msg.code));
+        out.writeBytes(std::to_string(msg.code()));
         out.writeBytes(" ");
-        out.writeBytes(HttpResponse::getMessageByCode(msg.code));
-        out.writeBytes("\r\n");
+        out.writeBytes(msg.message());
+        out.writeBytes(" \r\n");
+        HttpObjectEncoder::encode(ctx, msg, out);
     }
 };
 

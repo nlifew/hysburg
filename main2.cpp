@@ -68,29 +68,28 @@ struct EchoHandler: public ChannelHandler {
 struct HttpEchoHandler: public SimpleInboundChannelHandler<HttpRequest> {
 
     void channelRead0(ChannelHandlerContext &ctx, HttpRequest &msg) noexcept override {
-        if (!msg.isSuccess) {
+        if (!msg.isSuccess()) {
             LOGI("invalid http request, close it '%s'", ctx.channel().remoteAddrString().c_str());
             ctx.close();
             return;
         }
         auto respMsg = makeAny<HttpResponse>();
         auto response = respMsg->as<HttpResponse>();
-        response->headers = {
-                { "content-type", "text" }
-        };
-        auto &body = response->body;
-        body.append(msg.method).append(" ")
-            .append(msg.path).append(" ")
+        response->header("content-type", "text");
+
+        std::string body;
+        body.append(msg.method()).append(" ")
+            .append(msg.path()).append(" ")
             .append("HTTP/1.1\r\n");
-        for (auto &it : msg.headers) {
+        for (const auto &it : msg.headers()) {
             body.append(it.first)
                 .append(": ")
                 .append(it.second)
                 .append("\r\n");
         }
         body.append("\r\n");
-        body.append(msg.body);
-
+        body.append(msg.body());
+        response->body(body);
         ctx.writeAndFlush(std::move(respMsg));
     }
 
@@ -106,7 +105,7 @@ struct HttpEchoHandler: public SimpleInboundChannelHandler<HttpRequest> {
 };
 
 int main() {
-    auto group = std::make_shared<EventLoopGroup>(2);
+    auto eventLoop = std::make_shared<EventLoop>();
 //    Channel *channel = nullptr;
 //
 //    Bootstrap()
@@ -117,21 +116,18 @@ int main() {
 //        ->addListener(channel->closeOnFailure());
 //
 //    eventLoop->loop();
-
     Channel *channel; {
         ServerBootstrap<UVServerSocketChannel> b;
-        b.eventLoopGroup(group)
-                .channel(&channel)
-                .emplaceChildHandler<ChannelInitializer>([](Channel &channel) {
-                    channel.pipeline()
-                        .addLast("HttpClientCodec", std::make_shared<HttpServerCodec>())
-                        .addLast("HttpEchoHandler", std::make_shared<HttpEchoHandler>());
-                });
-        b.bind("127.0.0.1", 8080)->sync();
-        b.listen(64)->sync();
+        b.eventLoop(eventLoop)
+            .channel(&channel)
+            .emplaceChildHandler<ChannelInitializer>([](Channel &channel) {
+                channel.pipeline()
+                    .addLast("HttpClientCodec", std::make_shared<HttpServerCodec>())
+                    .addLast("HttpEchoHandler", std::make_shared<HttpEchoHandler>());
+            });
+        b.bind("127.0.0.1", 8080);
+        b.listen(64);
     }
-    while (true) {
-        sleep(1000);
-    }
+    eventLoop->loop();
     return 0;
 }

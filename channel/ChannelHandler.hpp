@@ -65,42 +65,48 @@ class ByteToMessageDecoder: public ChannelInboundHandler
 private:
     ByteBuf mByteBuff;
     std::vector<AnyPtr> mOutList;
-    bool mCallingDecode = false;
 
 protected:
     virtual void decode(ChannelHandlerContext &ctx, ByteBuf &in, std::vector<AnyPtr> &out) noexcept = 0;
 
     virtual void callDecode(ChannelHandlerContext &ctx, ByteBuf &in, std::vector<AnyPtr> &out) noexcept {
-        assert(!mCallingDecode);
-        mCallingDecode = true;
         decode(ctx, in, out);
-        mCallingDecode = false;
     }
 
-    virtual void discardReadBytes(ByteBuf &in) noexcept {
-        in.discardReadBytes();
-    }
-
+//    virtual void discardReadBytes(ByteBuf &in) noexcept {
+//        in.discardReadBytes();
+//    }
+public:
     void channelRead(ChannelHandlerContext &ctx, AnyPtr msg) noexcept override
     {
         if (!msg->is<ByteBuf>()) {
             ctx.fireChannelRead(std::move(msg));
             return;
         }
-        mByteBuff.transferFrom(*msg->as<ByteBuf>());
+        auto src = msg->as<ByteBuf>();
+        if (mByteBuff.readableBytes() == 0) {
+            mByteBuff.swap(*src);
+        } else {
+            mByteBuff.writeBytes(src->readData(), src->readableBytes());
+        }
 
         while (mByteBuff.readableBytes() > 0) {
             auto readIndex = mByteBuff.readIndex();
+            auto writeIndex = mByteBuff.writeIndex();
             callDecode(ctx, mByteBuff, mOutList);
 
             if (mOutList.empty()) {
-                mByteBuff.readIndex(readIndex);
-                discardReadBytes(mByteBuff);
+                // FIXME 这里有个问题，如果 decode() 在执行过程中更改了 wIndex，可能会出现越界
+                // 这里我们就不记录状态了
+//                mByteBuff.readIndex(readIndex);
+//                discardReadBytes(mByteBuff);
                 break;
             }
 
-            // 解析出了数据，但 readIndex 没有变化，视为异常情况
-            CHECK(mByteBuff.readIndex() != readIndex, "no bytes consumed but has data !")
+            // 解析出了数据，但 readIndex/readableBytes 没有变化，视为异常情况
+            CHECK(mByteBuff.readIndex() != readIndex
+                    || mByteBuff.writeIndex() != writeIndex,
+                    "no bytes consumed but has data !")
 
             for (auto &item: mOutList) {
                 ctx.fireChannelRead(std::move(item));
@@ -115,7 +121,7 @@ protected:
 
     void handlerRemoved(ChannelHandlerContext &ctx) noexcept override
     {
-        // 把剩下的未解析的数据发出去
+        // 把剩下的未解析的数据发出去 FIXME 这里得区分下是不是在 decode() 吧……
         if (ctx.pipeline().isActive() && mByteBuff.readableBytes() > 0) {
             auto msg = makeAny<ByteBuf>();
             mByteBuff.swap(*msg->as<ByteBuf>());
@@ -128,52 +134,52 @@ public:
     NO_COPY(ByteToMessageDecoder)
 };
 
-template <typename State>
-class ReplayingDecoder: public ByteToMessageDecoder {
-    State mState;
-    int mCheckpoint = -1;
-    ByteBuf *mUsingByteBuf = nullptr;
-protected:
-    State state() const noexcept { return mState; }
-
-    void state(State state) noexcept { mState = std::move(state); }
-
-    void checkpoint(State state) noexcept {
-        assert(mUsingByteBuf != nullptr);
-        mCheckpoint = mUsingByteBuf->readIndex();
-        mState = state;
-    }
-
-    void callDecode(ChannelHandlerContext &ctx, ByteBuf &in, std::vector<AnyPtr> &out) noexcept override {
-        assert(mUsingByteBuf == nullptr);
-        mUsingByteBuf = &in;
-
-        if (mCheckpoint >= 0) {
-            in.readIndex(mCheckpoint);
-        }
-
-        ByteToMessageDecoder::callDecode(ctx, in, out);
-
-        assert(mUsingByteBuf == &in);
-        mUsingByteBuf = nullptr;
-    }
-
-    void discardReadBytes(hysburg::ByteBuf &in) noexcept override {
-        auto readIndex = in.readIndex();
-        ByteToMessageDecoder::discardReadBytes(in);
-        if (mCheckpoint >= 0) {
-            mCheckpoint -= readIndex;
-            assert(mCheckpoint >= 0);
-        }
-    }
-
-public:
-    explicit ReplayingDecoder() noexcept = default;
-
-    explicit ReplayingDecoder(State state) noexcept: mState(state) {
-    }
-    NO_COPY(ReplayingDecoder)
-};
+//template <typename State>
+//class ReplayingDecoder: public ByteToMessageDecoder {
+//    State mState;
+//    int mCheckpoint = -1;
+//    ByteBuf *mUsingByteBuf = nullptr;
+//protected:
+//    State state() const noexcept { return mState; }
+//
+//    void state(State state) noexcept { mState = std::move(state); }
+//
+//    void checkpoint(State state) noexcept {
+//        assert(mUsingByteBuf != nullptr);
+//        mCheckpoint = mUsingByteBuf->readIndex();
+//        mState = state;
+//    }
+//
+//    void callDecode(ChannelHandlerContext &ctx, ByteBuf &in, std::vector<AnyPtr> &out) noexcept override {
+//        assert(mUsingByteBuf == nullptr);
+//        mUsingByteBuf = &in;
+//
+//        if (mCheckpoint >= 0) {
+//            in.readIndex(mCheckpoint);
+//        }
+//
+//        ByteToMessageDecoder::callDecode(ctx, in, out);
+//
+//        assert(mUsingByteBuf == &in);
+//        mUsingByteBuf = nullptr;
+//    }
+//
+//    void discardReadBytes(hysburg::ByteBuf &in) noexcept override {
+//        auto readIndex = in.readIndex();
+//        ByteToMessageDecoder::discardReadBytes(in);
+//        if (mCheckpoint >= 0) {
+//            mCheckpoint -= readIndex;
+//            assert(mCheckpoint >= 0);
+//        }
+//    }
+//
+//public:
+//    explicit ReplayingDecoder() noexcept = default;
+//
+//    explicit ReplayingDecoder(State state) noexcept: mState(state) {
+//    }
+//    NO_COPY(ReplayingDecoder)
+//};
 
 
 template<typename MsgType>
