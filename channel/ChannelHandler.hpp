@@ -83,12 +83,7 @@ public:
             ctx.fireChannelRead(std::move(msg));
             return;
         }
-        auto src = msg->as<ByteBuf>();
-        if (mByteBuff.readableBytes() == 0) {
-            mByteBuff.swap(*src);
-        } else {
-            mByteBuff.writeBytes(src->readData(), src->readableBytes());
-        }
+        mByteBuff.cumulate(*msg->as<ByteBuf>());
 
         while (mByteBuff.readableBytes() > 0) {
             auto readIndex = mByteBuff.readIndex();

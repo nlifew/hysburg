@@ -123,6 +123,22 @@ public:
         std::swap(mWriteIndex, o.mWriteIndex);
     }
 
+    void cumulate(ByteBuf &o) noexcept {
+        if (readableBytes() == 0) {
+            swap(o);
+        } else {
+            writeBytes(o.readData(), o.readableBytes());
+            o.readIndex(o.writeIndex());
+        }
+    }
+
+    void release() noexcept {
+        mCapacity = 0;
+        mWriteIndex = mReadIndex = 0;
+        Allocator().free(mData);
+        mData = nullptr;
+    }
+
     uint8_t *data() const noexcept { return mData; }
     size_t capacity() const noexcept { return mCapacity; }
 

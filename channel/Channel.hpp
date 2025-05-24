@@ -52,12 +52,12 @@ class DnsRequest {
         switch (res->ai_family) {
             case AF_INET: {
                 memcpy(&dest.in, res->ai_addr, sizeof(sockaddr_in));
-                dest.in.sin_port = mPort;
+                dest.in.sin_port = htons(mPort);
                 break;
             }
             case AF_INET6: {
                 memcpy(&dest.in6, res->ai_addr, sizeof(sockaddr_in6));
-                dest.in6.sin6_port = mPort;
+                dest.in6.sin6_port = htons(mPort);
             }
             default: {
                 LOGE("unknown dns family for '%s:%d': %d",
@@ -525,6 +525,11 @@ enum ChannelOption {
     KEEP_ALIVE,
 };
 
+/**
+ * 表示对端已经调用 shutdown 关闭了写入
+ */
+struct ShutdownEvent {};
+
 
 class Channel: public std::enable_shared_from_this<Channel> {
 protected:
@@ -546,6 +551,8 @@ protected:
     SocketAddress mLocalAddress {};
     SocketAddress mRemoteAddress {};
 
+    std::string mConnectHost;
+    uint16_t mConnectPort = 0;
 
     static void setResult(bool ok, const PromisePtr<void> &promise) noexcept {
         if (promise == nullptr) {
@@ -628,6 +635,9 @@ public:
     }
 
     FuturePtr<void> connect(const std::string_view &host, uint16_t port) noexcept {
+        mConnectHost = host;
+        mConnectPort = port;
+
         auto future = DnsRequest::resolve(host, port, mExecutor);
         future->addListener([self = mSelf](auto &future) {
             if (!future.isSuccess()) {
@@ -691,6 +701,11 @@ public:
     const SocketAddress &localAddress() const noexcept { return mLocalAddress; }
     const SocketAddress &remoteAddress() const noexcept { return mRemoteAddress; }
 
+    const std::string &connectHost() const noexcept { return mConnectHost; }
+    uint16_t connectPort() const noexcept { return mConnectPort; }
+
+    bool isActive() const noexcept { return mPipeline.isActive(); }
+
     std::string localAddrString() const noexcept {
         return Net::toString(&mLocalAddress.addr);
     }
@@ -737,11 +752,10 @@ public:
         return *this;
     }
 
-    Bootstrap &handler(ChannelHandlerPtr handler) noexcept {
-        if (handler == nullptr) {
-            return *this;
-        }
+    template<typename E, typename ...Args>
+    Bootstrap &handler(Args&&... args) noexcept {
         initAndRegister();
+        auto handler = std::make_shared<E>(std::forward<Args>(args)...);
 
         if (mChannel->executor()->inEventLoop()) {
             mChannel->pipeline().addLast(std::move(handler));
