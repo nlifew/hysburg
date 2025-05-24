@@ -116,18 +116,18 @@ int main() {
 //        ->addListener(channel->closeOnFailure());
 //
 //    eventLoop->loop();
-    Channel *channel; {
-        ServerBootstrap<UVServerSocketChannel> b;
-        b.eventLoop(eventLoop)
-            .channel(&channel)
-            .emplaceChildHandler<ChannelInitializer>([](Channel &channel) {
-                channel.pipeline()
-                    .addLast("HttpClientCodec", std::make_shared<HttpServerCodec>())
-                    .addLast("HttpEchoHandler", std::make_shared<HttpEchoHandler>());
-            });
-        b.bind("127.0.0.1", 8080);
-        b.listen(64);
-    }
-    eventLoop->loop();
+//    Channel *channel; {
+//        ServerBootstrap<UVServerSocketChannel> b;
+//        b.eventLoop(eventLoop)
+//            .channel(&channel)
+//            .emplaceChildHandler<ChannelInitializer>([](Channel &channel) {
+//                channel.pipeline()
+//                    .addLast("HttpClientCodec", std::make_shared<HttpServerCodec>())
+//                    .addLast("HttpEchoHandler", std::make_shared<HttpEchoHandler>());
+//            });
+//        b.bind("127.0.0.1", 8080);
+//        b.listen(64);
+//    }
+//    eventLoop->loop();
     return 0;
 }

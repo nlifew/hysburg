@@ -145,18 +145,19 @@ public:
         }
     }
 
-//    /**
-//     * 事实上这个函数根本停不下来，囧
-//     */
-//    void stop() noexcept {
-//        post<EventLoop>(this, [](EventLoop *self) {
-//            std::unique_lock lockGuard(self->mMutex);
-//            if (self->mAsyncReady) {
-//                self->mAsyncReady = false;
-//                uv_close(reinterpret_cast<uv_handle_t*>(&self->mAsync), nullptr);
-//            }
-//        });
-//    }
+    /**
+     * 事实上这个函数根本停不下来，囧
+     * 只能用于测试，用来当没有活跃链接时快速退出 EventLoop
+     */
+    void quit() noexcept {
+        post([this]() {
+            std::unique_lock lockGuard(mMutex);
+            if (mAsyncReady) {
+                mAsyncReady = false;
+                uv_close(reinterpret_cast<uv_handle_t*>(&mAsync), nullptr);
+            }
+        });
+    }
 
     bool inEventLoop() const noexcept { return Log::threadId() == mLooperThreadId; }
 
