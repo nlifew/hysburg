@@ -82,6 +82,9 @@ public:
         auto it = std::find_if(mHeaders.begin(), mHeaders.end(), [&name, this](Header &it) -> bool {
             return name == it.first.get(mRaw);
         });
+        if (it == mHeaders.end()) {
+            return "";
+        }
         return it->second.get(mRaw);
     }
 
@@ -135,6 +138,11 @@ public:
 
     std::string_view path() noexcept { return mPath.get(mRaw); }
     std::string_view method() noexcept { return mMethod.get(mRaw); }
+
+    explicit HttpRequest() noexcept {
+        path("/");
+        method("GET");
+    }
 };
 
 class HttpResponse: public HttpObject
