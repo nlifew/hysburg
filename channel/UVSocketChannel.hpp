@@ -51,12 +51,12 @@ class UVSocketChannel: public Channel
                 self->pipeline().fireChannelRead(std::move(msg));
                 return ;
             }
-            if (nread == UV_EOF) {
-                // 对面已经关闭了对面的写端，此时这个 channel 仍然可以认为是活跃的
-                auto msg = makeAny<ShutdownEvent>();
-                self->pipeline().fireUserEvent(std::move(msg));
-                return;
-            }
+//            if (nread == UV_EOF) {
+//                // 对面已经关闭了对面的写端，此时这个 channel 仍然可以认为是活跃的
+//                auto msg = makeAny<ShutdownEvent>();
+//                self->pipeline().fireUserEvent(std::move(msg));
+//                return;
+//            }
             if (nread < 0) {
                 self->doClose();
             }
