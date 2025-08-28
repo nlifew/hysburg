@@ -30,43 +30,50 @@ class EventLoop {
         uv_timer_t timer {};
         EventLoop *eventLoop = nullptr;
     };
+    using PostReqPtr = std::unique_ptr<PostReq>;
 
     uint64_t mLooperThreadId = 0;
     uv_loop_t mLooper {};
 
     std::atomic<uint64_t> mTimerId { 1 };
-    std::map<uint64_t, std::shared_ptr<PostReq>> mPostReq;
+    std::map<uint64_t, PostReqPtr> mPostReq;
 
     std::mutex mMutex;
     uv_async_t mAsync {};
     volatile bool mAsyncReady = false;
-    std::map<uint64_t, std::shared_ptr<PostReq>> mOuterPostReq;
+    std::map<uint64_t, PostReqPtr> mOuterPostReq;
 
     std::weak_ptr<EventLoopGroup> mParent;
 
 
     void flushOuterReq() noexcept {
-        std::map<uint64_t, std::shared_ptr<PostReq>> cpy;
+        std::map<uint64_t, PostReqPtr> cpy;
         {
             std::unique_lock lockGuard(mMutex);
             cpy.swap(mOuterPostReq);
         }
-        for (const auto &it : cpy) {
-            insertInnerReq(it.second);
+        for (auto &it : cpy) {
+            insertInnerReq(std::move(it.second));
         }
     }
 
-    void insertInnerReq(const std::shared_ptr<PostReq> &req) noexcept {
-        mPostReq[req->id] = req;
+    void insertInnerReq(PostReqPtr pReq) noexcept {
+        auto *req = pReq.get();
+        mPostReq[req->id] = std::move(pReq);
         uv_timer_init(&mLooper, &req->timer);
-        req->timer.data = req.get();
-        uv_timer_start(&req->timer, [](uv_timer_t *tm) {
-            auto tmp = static_cast<PostReq*>(tm->data);
-            auto req = tmp->eventLoop->mPostReq[tmp->id];
-            // 先从 map 中移除自己，防止回调 cb 的时候辗转调用到 cancel
-            req->eventLoop->mPostReq.erase(req->id);
-            if (req->rcb) { req->rcb(); }
-        }, req->delay, 0);
+        req->timer.data = req;
+        uv_timer_start(
+                &req->timer,
+                [](uv_timer_t *tm) {
+                    auto tmp = static_cast<PostReq*>(tm->data);
+                    auto req = std::move(tmp->eventLoop->mPostReq[tmp->id]);
+                    // 先从 map 中移除自己，防止回调 cb 的时候辗转调用到 cancel
+                    req->eventLoop->mPostReq.erase(req->id);
+                    if (req->rcb) { req->rcb(); }
+                },
+                req->delay,
+                0
+        );
     }
 
     void cancelOuterReq(uint64_t id) noexcept {
@@ -80,7 +87,7 @@ class EventLoop {
     void cancelInnerReq(uint64_t id) noexcept {
         auto it = mPostReq.find(id);
         if (it != mPostReq.end()) {
-            auto req = it->second;
+            auto req = std::move(it->second);
             uv_timer_stop(&req->timer);
             mPostReq.erase(it);
         }
@@ -119,22 +126,23 @@ public:
     }
 
     uint64_t post(long ms, std::function<void()> cb) noexcept {
-        auto req = std::make_shared<PostReq>();
+        auto id = mTimerId.fetch_add(1, std::memory_order_relaxed);
+        auto req = std::make_unique<PostReq>();
         req->delay = ms;
         req->rcb = std::move(cb);
         req->eventLoop = this;
-        req->id = mTimerId.fetch_add(1, std::memory_order_relaxed);
+        req->id = id;
 
         if (inEventLoop()) {
-            insertInnerReq(req);
+            insertInnerReq(std::move(req));
         } else {
             std::unique_lock lockGuard(mMutex);
-            mOuterPostReq[req->id] = req;
+            mOuterPostReq[req->id] = std::move(req);
             if (mAsyncReady) {
                 uv_async_send(&mAsync);
             }
         }
-        return req->id;
+        return id;
     }
 
     void cancel(uint64_t id) noexcept {
