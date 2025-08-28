@@ -58,10 +58,11 @@ class DnsRequest {
             case AF_INET6: {
                 memcpy(&dest.in6, res->ai_addr, sizeof(sockaddr_in6));
                 dest.in6.sin6_port = htons(mPort);
+                break;
             }
             default: {
-                LOGE("unknown dns family for '%s:%d': %d",
-                     mName.c_str(), mPort, res->ai_family);
+                LOGE("unknown dns family '%d' for '%s:%d': %d",
+                     res->ai_family, mName.c_str(), mPort, res->ai_family);
                 return -1;
             }
         }
@@ -78,13 +79,18 @@ class DnsRequest {
         request->mBeginTime = Log::currentTimeMillis();
 
         auto ret = uv_getaddrinfo(
-                request->mExecutor->handle(), &request->mReq,
+                request->mExecutor->handle(),
+                &request->mReq,
                 [](uv_getaddrinfo_t* req, int status, struct addrinfo* res) {
                     auto request = static_cast<DnsRequest*>(req->data);
                     request->parseDnsResponse(status, res);
                     uv_freeaddrinfo(res);
                     delete request;
-                },request->mName.c_str(), request->mPorts.c_str(), &request->mHints);
+                },
+                request->mName.c_str(),
+                request->mPorts.c_str(),
+                &request->mHints
+        );
         if (ret != 0) {
             request->mPromise.setFailure();
             delete request;
@@ -94,7 +100,7 @@ class DnsRequest {
 public:
     explicit DnsRequest(EventLoopPtr &executor) noexcept:
             mPromise(executor), mExecutor(executor) {
-        mHints.ai_family = PF_UNSPEC;
+        mHints.ai_family = PF_INET;
         mHints.ai_socktype = SOCK_STREAM;
         mHints.ai_protocol = IPPROTO_TCP;
     }

@@ -13,13 +13,12 @@ link_directories(/usr/local/lib)
 add_subdirectory(test)
 
 add_subdirectory(third_party)
-add_compile_options("-Wall" "-Wextra" "-Wno-unused-parameter")
+add_compile_options("-Wall" "-Wextra" "-Werror" "-Wno-unused-parameter")
 
 add_library(
         runtime
         STATIC
         channel/Channel.cpp
-        channel/TLSContext.cpp
 )
 target_link_libraries(
         runtime
