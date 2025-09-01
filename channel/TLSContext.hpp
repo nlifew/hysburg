@@ -5,7 +5,8 @@
 
 #include <string>
 #include <vector>
-#include <s2n.h>
+#include <openssl/ssl.h>
+#include <openssl/err.h>
 
 #include "ChannelHandler.hpp"
 
@@ -17,188 +18,47 @@ using TLSContextPtr = std::shared_ptr<TLSContext>;
 class TLSContextFactory;
 using TLSContextFactoryPtr = std::shared_ptr<TLSContextFactory>;
 
-using TLSMode = s2n_mode;
-
-
-class TLSContextFactory: public std::enable_shared_from_this<TLSContextFactory> {
-    friend class TLSContext;
-
-    s2n_config *mConfig = nullptr;
-    std::vector<s2n_cert_chain_and_key*> mCerts;
-
-    static std::string readFile(const std::string_view &path_r) noexcept {
-        std::string path_s;
-        const char *path = "";
-        if (path_r[path_r.size()] == '\0') {
-            path = path_r.data();
-        } else {
-            path_s = path_r;
-            path = path_s.data();
-        }
-
-        struct stat st {};
-        if (::stat(path, &st) != 0) {
-            return "";
-        }
-        std::string result;
-        result.reserve(st.st_size);
-
-        std::unique_ptr<FILE, void(*)(FILE*)> fp(
-                fopen(path, "rb"),
-                [](FILE *fp) { fclose(fp); }
-        );
-        if (fp == nullptr) {
-            fp.release();
-            return "";
-        }
-        std::vector<char> buff(16 * 1024);
-        while (!feof(fp.get()) && !ferror(fp.get())) {
-            ssize_t bytes = fread(buff.data(), 1, buff.size(), fp.get());
-            if (bytes <= 0) {
-                break;
-            }
-            result.append(buff.data(), bytes);
-        }
-        return result;
-    }
-
-public:
-    static void initLibrary() {
-        static std::once_flag initOnce {};
-        std::call_once(initOnce, []() {
-            // 禁用 mlock()
-            setenv("S2N_DONT_MLOCK", "1", 1);
-
-            // 内存管理
-            s2n_mem_set_callbacks(nullptr, nullptr, [](void **ptr, uint32_t requested, uint32_t *allocated) -> int {
-                *ptr = ByteBuf::Allocator().alloc(requested);
-                *allocated = requested;
-                return 0;
-            }, [](void *ptr, uint32_t size) -> int {
-                ByteBuf::Allocator().free(static_cast<uint8_t*>(ptr));
-                return 0;
-            });
-
-            // 初始化库
-            auto ret = s2n_init();
-            CHECK(ret == S2N_SUCCESS, "libs2n init failed: '%d'", ret)
-
-            s2n_stack_traces_enabled_set(true);
-        });
-    }
-
-    explicit TLSContextFactory() noexcept {
-        initLibrary();
-        mConfig = s2n_config_new();
-    }
-    NO_COPY(TLSContextFactory)
-
-    ~TLSContextFactory() noexcept {
-        for (auto it : mCerts) {
-            s2n_cert_chain_and_key_free(it);
-        }
-        s2n_config_free(mConfig);
-    }
-
-    int addAlpn(const std::string_view &alpn) noexcept {
-        return s2n_config_append_protocol_preference(
-                mConfig,
-                reinterpret_cast<const uint8_t*>(alpn.data()),
-                alpn.size()
-        );
-    }
-
-    int certFile(const std::string_view &certFile, const std::string_view &keyFile) noexcept {
-        auto cert = readFile(certFile);
-        auto key = readFile(keyFile);
-        if (cert.empty() || key.empty()) {
-            return -1;
-        }
-        auto pair = s2n_cert_chain_and_key_new();
-        mCerts.push_back(pair);
-        return s2n_cert_chain_and_key_load_pem(pair, cert.data(), key.data());
-    }
-
-    TLSContextPtr newInstance(TLSMode mode) noexcept;
+enum TLSMode {
+    S2N_SERVER,
+    S2N_CLIENT,
 };
 
 
 class TLSContext: public std::enable_shared_from_this<TLSContext> {
-public:
-    using Writer = std::function<ssize_t(const uint8_t *, uint32_t)>;
-    using Reader = std::function<ssize_t(uint8_t*, uint32_t)>;
 private:
+    SSL *mSSL = nullptr;
+    BIO *mReaderBio = nullptr;
+    BIO *mWriterBio = nullptr;
     TLSMode mMode = TLSMode::S2N_CLIENT;
-    std::string mSni;
-    s2n_connection *mConn = nullptr;
-    std::shared_ptr<TLSContextFactory> mFactory;
-    Writer mWriter;
-    Reader mReader;
-    bool mConfigSet = false;
+
+    /**
+     * 低版本中 SSL_set_tlsext_host_name() 似乎不会执行 strdup() 而是直接使用
+     * 开发者传进去的指针，但不是很确定。此处保险起见放一个 std::string
+     */
+    std::string mHost;
 
 public:
-    explicit TLSContext(TLSContextFactory &factory, TLSMode mode) noexcept {
+    explicit TLSContext(SSL *ssl, TLSMode mode) noexcept {
+        mSSL = ssl;
         mMode = mode;
-        mFactory = factory.shared_from_this();
-        mConn = s2n_connection_new(mode);
-        s2n_connection_set_ctx(mConn, this);
-        s2n_connection_set_blinding(mConn, S2N_SELF_SERVICE_BLINDING);
+        mReaderBio = BIO_new(BIO_s_mem());
+        mWriterBio = BIO_new(BIO_s_mem());
+
+        SSL_set0_rbio(mSSL, mReaderBio);
+        SSL_set0_wbio(mSSL, mWriterBio);
+
+        if (mode == TLSMode::S2N_CLIENT) {
+            SSL_set_connect_state(mSSL);
+            SSL_set_verify(mSSL, SSL_VERIFY_PEER, nullptr);
+        } else {
+            SSL_set_accept_state(mSSL);
+        }
     }
+
     NO_COPY(TLSContext)
 
     ~TLSContext() noexcept {
-        s2n_connection_free(mConn);
-    }
-
-    int sni(const std::string_view &sni) noexcept {
-        mSni = sni;
-        return s2n_set_server_name(mConn, mSni.c_str());
-    }
-
-    const std::string &sni() const noexcept { return mSni; }
-
-    int setReader(Reader reader) noexcept {
-        mReader.swap(reader);
-        s2n_connection_set_recv_ctx(mConn, this);
-        s2n_connection_set_recv_cb(mConn, [](void *io_context, uint8_t *buf, uint32_t len) -> int {
-            auto self = static_cast<TLSContext*>(io_context);
-            if (self->mReader == nullptr) {
-                errno = EFAULT;
-                return -1;
-            }
-            auto bytes = self->mReader(buf, len);
-            // 返回 0 会被 s2n 认为是 "链接已关闭"
-            if (bytes == 0) {
-                errno = EAGAIN;
-                return -1;
-            }
-            return (int) bytes;
-        });
-        return 0;
-    }
-
-    int setWriter(Writer writer) noexcept {
-        mWriter.swap(writer);
-        s2n_connection_set_send_ctx(mConn, this);
-        s2n_connection_set_send_cb(mConn, [](void *io_context, const uint8_t *buf, uint32_t len) -> int {
-            auto self = static_cast<TLSContext*>(io_context);
-            if (self->mWriter == nullptr) {
-                errno = EFAULT;
-                return -1;
-            }
-            auto bytes = self->mWriter(buf, len);
-            // 返回 0 会被 s2n 认为是 "链接已关闭"
-            if (bytes == 0) {
-                errno = EAGAIN;
-                return -1;
-            }
-            return (int) bytes;
-        });
-        return 0;
-    }
-
-    int fd(int fd) noexcept {
-        return s2n_connection_set_fd(mConn, fd);
+        SSL_free(mSSL);
     }
 
     enum HandshakeResult {
@@ -207,78 +67,84 @@ public:
         ERROR,
     };
 
-    const char *errMsg() const noexcept {
-        (void) this;
-        return s2n_strerror_name(s2n_errno);
-    }
-
     [[nodiscard]]
     HandshakeResult handshake() noexcept {
-        if (!mConfigSet) {
-            mConfigSet = true;
-            s2n_connection_set_config(mConn, mFactory->mConfig);
-        }
-        s2n_blocked_status blocked = S2N_NOT_BLOCKED;
-        auto ret = s2n_negotiate(mConn, &blocked);
-        if (ret == S2N_SUCCESS) {
+        auto ret = SSL_do_handshake(mSSL);
+        if (ret == 1) {
+            LOGI("SSL handshake ok");
             return HandshakeResult::OK;
         }
-        auto errorType = s2n_error_get_type(s2n_errno);
-        if (errorType == S2N_ERR_T_BLOCKED) {
-            return HandshakeResult::AGAIN;
+        if (ret < 0) {
+            ret = SSL_get_error(mSSL, ret);
+            if (ret == SSL_ERROR_WANT_READ || ret == SSL_ERROR_WANT_WRITE) {
+                return HandshakeResult::AGAIN;
+            }
         }
-        return ERROR;
+        std::string stacktrace;
+
+        unsigned long e;
+        while ((e = ERR_get_error()) != 0) {
+            char buf[256] = { 0 };
+            ERR_error_string_n(e, buf, sizeof(buf));
+            stacktrace += buf;
+            stacktrace += "\n";
+        }
+        LOGE("ssl handshake failed: \n%s", stacktrace.c_str());
+        return HandshakeResult::ERROR;
     }
 
-    ssize_t send(ByteBuf &byteBuf) noexcept {
-        auto oldIndex = byteBuf.readIndex();
+    void send(ByteBuf &byteBuf) noexcept {
+        auto ret = SSL_write(mSSL, byteBuf.readData(), byteBuf.readableBytes());
+        if (ret > 0) {
+            byteBuf.readIndex(byteBuf.readIndex() + ret);
+        }
+    }
 
-        while (byteBuf.readableBytes() > 0) {
-            s2n_blocked_status blocked = S2N_NOT_BLOCKED;
-            auto bytes = s2n_send(
-                    mConn, byteBuf.readData(), byteBuf.readableBytes(), &blocked
-            );
-            if (bytes > 0) {
-                byteBuf.readIndex(byteBuf.readIndex() + bytes);
-                continue;
-            }
-            auto errorType = s2n_error_get_type(s2n_errno);
-            if (errorType == S2N_ERR_T_BLOCKED) {
+    void recv(ByteBuf &byteBuf) noexcept {
+        char buff[4096];
+        while (true) {
+            auto bytes = SSL_read(mSSL, buff, sizeof(buff));
+            if (bytes <= 0) {
                 break;
             }
-            return -1;
+            byteBuf.writeBytes(buff, bytes);
         }
-        return byteBuf.readIndex() - oldIndex;
     }
 
-    ssize_t recv(ByteBuf &byteBuf) noexcept {
-        auto oldIndex = byteBuf.writeIndex();
-        while (byteBuf.capacity() > byteBuf.writeIndex()) {
-            s2n_blocked_status blocked = S2N_NOT_BLOCKED;
-            auto bytes = s2n_recv(
-                    mConn, byteBuf.writeData(), byteBuf.capacity() - byteBuf.writeIndex(), &blocked
-            );
-            if (bytes > 0) {
-                byteBuf.writeIndex(byteBuf.writeIndex() + bytes);
-                continue;
-            }
-            auto errorType = s2n_error_get_type(s2n_errno);
-            if (errorType == S2N_ERR_T_BLOCKED) {
+    long pendingReadableBytes() noexcept {
+        return BIO_pending(mWriterBio);
+    }
+
+    void read(ByteBuf &byteBuf) {
+        char buff[4096];
+        while (true) {
+            auto bytes = BIO_pending(mWriterBio);
+            if (bytes <= 0) {
                 break;
             }
-            return -1;
+            bytes = BIO_read(mWriterBio, buff, sizeof(buff));
+            if (bytes <= 0) {
+                break;
+            }
+            byteBuf.writeBytes(buff, bytes);
         }
-        return byteBuf.writeIndex() - oldIndex;
     }
 
-    uint64_t shutdownDelay() noexcept {
-        // 纳秒转毫秒
-        return s2n_connection_get_delay(mConn) / 1000 / 1000;
+    void write(ByteBuf &byteBuf) {
+        auto ret = BIO_write(mReaderBio, byteBuf.readData(), byteBuf.readableBytes());
+        if (ret > 0) {
+            byteBuf.readIndex(byteBuf.readIndex() + ret);
+        }
     }
 
     void shutdown() noexcept {
-        s2n_blocked_status blocked = S2N_NOT_BLOCKED;
-        s2n_shutdown(mConn, &blocked);
+        SSL_shutdown(mSSL);
+    }
+
+    void setHost(const std::string_view &host) {
+        mHost = host;
+        SSL_set1_host(mSSL, mHost.c_str());
+        SSL_set_tlsext_host_name(mSSL, mHost.c_str());
     }
 
     TLSMode mode() const noexcept { return mMode; }
@@ -287,10 +153,70 @@ public:
     bool isClientMode() const noexcept { return mMode == TLSMode::S2N_CLIENT; }
 };
 
+class TLSContextFactory: public std::enable_shared_from_this<TLSContextFactory> {
+    friend class TLSContext;
+
+    SSL_CTX *mSSLCtx = nullptr;
+
+    static int sslError(int ret) {
+        if (ret == 1) {
+            return 0;
+        }
+        return -1;
+    }
+
+public:
+    struct GlobalInit {
+        explicit GlobalInit() noexcept {
+            SSL_library_init();
+            SSL_load_error_strings();
+        }
+    };
+
+    explicit TLSContextFactory() noexcept {
+        static GlobalInit initLibrary;
+        mSSLCtx = SSL_CTX_new(TLS_method());
+        auto ret = SSL_CTX_set_min_proto_version(mSSLCtx, TLS1_2_VERSION);
+        CHECK(ret == 1, "SSL_CTX_set_min_proto_version() == %ld", ret)
+
+        ret = SSL_CTX_set_max_proto_version(mSSLCtx, TLS1_3_VERSION);
+        CHECK(ret == 1, "SSL_CTX_set_max_proto_version() = %ld", ret)
+
+        ret = SSL_CTX_set_cipher_list(mSSLCtx, "HIGH:!aNULL:!MD5");
+        CHECK(ret == 1, "SSL_CTX_set_cipher_list() = %ld", ret)
+
+        ret = SSL_CTX_set_default_verify_paths(mSSLCtx);
+        CHECK(ret == 1, "SSL_CTX_set_default_verify_paths() = %ld", ret)
+    }
+
+    NO_COPY(TLSContextFactory)
+
+    ~TLSContextFactory() noexcept {
+        SSL_CTX_free(mSSLCtx);
+        mSSLCtx = nullptr;
+    }
+
+    int certFile(const std::string_view &certFile, const std::string_view &keyFile) noexcept {
+        std::string cert(certFile);
+        std::string key(keyFile);
+        auto ret = SSL_CTX_use_certificate_chain_file(mSSLCtx, cert.c_str());
+        if (ret != 1) { return sslError(ret); }
+
+        ret = SSL_CTX_use_PrivateKey_file(mSSLCtx, key.c_str(), SSL_FILETYPE_PEM);
+        if (ret != 1) { return sslError(ret); }
+
+        ret = SSL_CTX_check_private_key(mSSLCtx);
+        return sslError(ret);
+    }
+
+    TLSContextPtr newInstance(TLSMode mode) noexcept {
+        return std::make_shared<TLSContext>(SSL_new(mSSLCtx), mode);
+    }
+};
+
 
 class TLSContextHandler: public ChannelDuplexHandler {
 
-    ByteBuf mByteBuff;
     ByteBuf mTmpWriteBuff;
     TLSContextPtr mTLSContext;
 
@@ -302,7 +228,6 @@ class TLSContextHandler: public ChannelDuplexHandler {
     };
 
     State mState = State::INIT;
-    uint64_t mShutdownTimerId = 0;
 
     void decode(ChannelHandlerContext &ctx) noexcept {
         if (mState == State::INIT) {
@@ -317,37 +242,18 @@ class TLSContextHandler: public ChannelDuplexHandler {
         if (mState == State::ERROR) {
             onError(ctx);
         }
+        flush(ctx);
     }
 
     void onInit(ChannelHandlerContext &ctx) noexcept {
-        mTLSContext->setReader([this](uint8_t *out, uint32_t outLen) -> ssize_t {
-            auto bytes = (ssize_t) mByteBuff.readBytes(out, outLen);
-            if (mByteBuff.readableBytes() == 0) {
-                mByteBuff.discardReadBytes();
-            }
-            return bytes;
-        });
-        mTLSContext->setWriter([&ctx](const uint8_t *in, uint32_t inLen) -> ssize_t {
-            if (!ctx.channel().isActive()) {
-                return -1;
-            }
-            if (inLen > 0) {
-                auto msg = makeAny<ByteBuf>();
-                auto byteBuf = msg->as<ByteBuf>();
-                byteBuf->writeBytes(in, inLen);
-                ctx.writeAndFlush(std::move(msg));
-            }
-            return inLen;
-        });
-
         // client 必须设置 sni
-        if (mTLSContext->isClientMode() && mTLSContext->sni().empty()) {
+        if (mTLSContext->isClientMode()) {
             auto &host = ctx.channel().connectHost();
             if (!host.empty()) {
                 LOGW("rewrite sni from channel connect name: '%s'", host.c_str());
-                mTLSContext->sni(host);
+                mTLSContext->setHost(host);
             } else {
-                LOGW("empty sni, and failed to rewrite from channel");
+                LOGW("empty sni, will not rewrite from channel");
             }
         }
         mState = State::HANDSHAKE;
@@ -359,13 +265,13 @@ class TLSContextHandler: public ChannelDuplexHandler {
                 break;
             }
             case TLSContext::OK: {
-                mState = mTLSContext->send(mTmpWriteBuff) < 0 ?
-                        State::ERROR : State::OK;
+                mTLSContext->send(mTmpWriteBuff);
                 mTmpWriteBuff.release();
+                mState = State::OK;
                 break;
             }
             case TLSContext::ERROR: {
-                LOGW("TLS handshake failed, '%s'", mTLSContext->errMsg());
+                LOGW("TLS handshake failed");
                 mState = State::ERROR;
                 break;
             }
@@ -376,12 +282,7 @@ class TLSContextHandler: public ChannelDuplexHandler {
         while (true) {
             auto msg = makeAny<ByteBuf>(16 * 1024);
             auto byteBuf = msg->as<ByteBuf>();
-            auto ret = mTLSContext->recv(*byteBuf);
-            if (ret < 0) {
-                LOGW("TLS recv failed, '%s'", mTLSContext->errMsg());
-                mState = State::ERROR;
-                break;
-            }
+            mTLSContext->recv(*byteBuf);
             if (byteBuf->readableBytes() == 0) {
                 break;
             }
@@ -390,38 +291,28 @@ class TLSContextHandler: public ChannelDuplexHandler {
     }
 
     void onError(ChannelHandlerContext &ctx) noexcept {
-        if (mShutdownTimerId == 0) {
-            auto delayMs = (long ) mTLSContext->shutdownDelay();
-            mShutdownTimerId = ctx.channel().executor()->post(delayMs, [&ctx, this]() {
-                mTLSContext->shutdown();
-                ctx.close();
-            });
-        }
-        mByteBuff.release();
+        mTLSContext->shutdown();
         mTmpWriteBuff.release();
-    }
-
-    void removeShutdownTimer(ChannelHandlerContext &ctx) noexcept {
-        if (mShutdownTimerId != 0) {
-            ctx.channel().executor()->cancel(mShutdownTimerId);
-            mShutdownTimerId = 0;
-        }
+        ctx.close();
     }
 
     void encode(ChannelHandlerContext &, ByteBuf &byteBuf, const PromisePtr<void>& promise) noexcept {
+        bool ok = true;
         if (mState == State::HANDSHAKE) {
             mTmpWriteBuff.cumulate(byteBuf);
-            if (promise) { promise->setSuccess(); }
         }
         if (mState == State::OK) {
-            if (mTLSContext->send(byteBuf) < 0) {
-                mState = State::ERROR;
-            } else if (promise) {
-                promise->setSuccess();
-            }
+            mTLSContext->send(byteBuf);
         }
         if (mState == State::ERROR) {
-            if (promise) { promise->setFailure(); }
+            ok = false;
+        }
+        if (promise) {
+            if (ok) {
+                promise->setSuccess();
+            } else {
+                promise->setFailure();
+            }
         }
     }
 
@@ -444,17 +335,8 @@ public:
             ctx.fireChannelRead(std::move(msg));
             return;
         }
-        mByteBuff.cumulate(*msg->as<ByteBuf>());
+        mTLSContext->write(*msg->as<ByteBuf>());
         decode(ctx);
-    }
-
-    void handlerRemoved(ChannelHandlerContext &ctx) noexcept override {
-        removeShutdownTimer(ctx);
-    }
-
-    void channelInactive(ChannelHandlerContext &ctx) noexcept override {
-        ctx.fireChannelInactive();
-        removeShutdownTimer(ctx);
     }
 
     void write(ChannelHandlerContext &ctx, AnyPtr msg, PromisePtr<void> promise) noexcept override {
@@ -466,7 +348,15 @@ public:
     }
 
     void flush(ChannelHandlerContext &ctx) noexcept override {
-        /* no-op */
+        if (mTLSContext->pendingReadableBytes() <= 0) {
+            return;
+        }
+        auto msg = makeAny<ByteBuf>(16 * 1024);
+        auto byteBuf = msg->as<ByteBuf>();
+        mTLSContext->read(*byteBuf);
+        if (byteBuf->readableBytes() > 0) {
+            ctx.writeAndFlush(std::move(msg));
+        }
     }
 
     void close(ChannelHandlerContext &ctx) noexcept override {
@@ -476,9 +366,14 @@ public:
         ctx.close();
     }
 
-    explicit TLSContextHandler(const TLSContextFactoryPtr &factory, TLSMode mode) noexcept {
-        mTLSContext = factory->newInstance(mode);
+    explicit TLSContextHandler(TLSContextPtr tlsCtx) noexcept {
+        mTLSContext.swap(tlsCtx);
     }
+
+    explicit TLSContextHandler(TLSContextFactoryPtr &factory, TLSMode mode) noexcept:
+            TLSContextHandler(factory->newInstance(mode)) {
+    }
+
     NO_COPY(TLSContextHandler)
 
     [[nodiscard]]
