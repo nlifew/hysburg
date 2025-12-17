@@ -86,22 +86,20 @@ public:
         mByteBuff.cumulate(*msg->as<ByteBuf>());
 
         while (mByteBuff.readableBytes() > 0) {
-            auto readIndex = mByteBuff.readIndex();
-            auto writeIndex = mByteBuff.writeIndex();
+            const auto rIdx = mByteBuff.readIndex();
+            const auto wIdx = mByteBuff.writeIndex();
+
             callDecode(ctx, mByteBuff, mOutList);
 
             if (mOutList.empty()) {
-                // FIXME 这里有个问题，如果 decode() 在执行过程中更改了 wIndex，可能会出现越界
-                // 这里我们就不记录状态了
-//                mByteBuff.readIndex(readIndex);
-//                discardReadBytes(mByteBuff);
+                // 如果 wIndex 改变，还原 rIndex 就变得不安全
+                CHECK(wIdx == mByteBuff.writeIndex(), "you can't change wIndex when decode()")
+                mByteBuff.readIndex(rIdx);
                 break;
             }
 
             // 解析出了数据，但 readIndex/readableBytes 没有变化，视为异常情况
-            CHECK(mByteBuff.readIndex() != readIndex
-                    || mByteBuff.writeIndex() != writeIndex,
-                    "no bytes consumed but has data !")
+            CHECK(mByteBuff.readIndex() != rIdx, "no bytes consumed but has data !")
 
             for (auto &item: mOutList) {
                 ctx.fireChannelRead(std::move(item));

@@ -10,9 +10,10 @@
 namespace hysburg
 {
 
+
 class HttpObject
 {
-    template<typename, llhttp_type_t>
+    template <typename, llhttp_type_t>
     friend class HttpObjectDecoder;
 
 protected:
@@ -21,6 +22,7 @@ protected:
     struct StringRef {
         size_t off = INVALID_OFFSET;
         size_t len = 0;
+        size_t cap = 0;
 
         [[nodiscard]]
         std::string_view get(const ByteBuf &buf) const noexcept {
@@ -47,68 +49,77 @@ protected:
     std::vector<Header> mHeaders;
     StringRef mBody;
 
-    [[nodiscard]]
-    bool ownThisString(const std::string_view &str) const noexcept {
-        auto from = (char *) mRaw.data();
-        auto to = (char *) mRaw.data() + mRaw.writeIndex();
-        return from <= str.data() && str.data() <= to;
-    }
-
-    [[nodiscard]]
-    StringRef update(const StringRef &oldValue, const std::string_view &newValue) noexcept {
-        // FIXME 优化
-//        if (ownThisString(oldValue) && oldValue.size() >= newValue.size()) {
-//            // 备份当前 wIndex
-//            auto wIndex = mRaw.writeIndex();
-//            // 移动指针，跳转到 oldValue 的位置
-//            mRaw.writeIndex(oldValue.data() - (char *) mRaw.data());
-//            // 写入二进制数据
-//            mRaw.writeBytes(newValue);
-//            // 还原 wIndex
-//            mRaw.writeIndex(wIndex);
-//            // 可以返回了
-//            return { oldValue.data(), newValue.size() };
-//        }
-//
+    void update(StringRef *dest, const std::string_view &src) noexcept {
+        // 检查空间是否足够
+        if (dest->cap >= src.size()) {
+            // 备份当前 wIndex
+            auto wIndex = mRaw.writeIndex();
+            // 移动指针，跳转到 oldValue 的位置
+            mRaw.writeIndex(dest->off);
+            // 写入字符串
+            mRaw.writeBytes(src);
+            // 还原 wIndex
+            mRaw.writeIndex(wIndex);
+            // 更新数据
+            dest->len = src.size();
+            return;
+        }
         // 直接在后面插入
-        auto off = mRaw.writeIndex();
-        mRaw.writeBytes(newValue);
-        return { off, newValue.size() };
+        auto wIndex = mRaw.writeIndex();
+        mRaw.writeBytes(src);
+        dest->off = wIndex;
+        dest->len = src.size();
+        dest->cap = src.size();
     }
 public:
     virtual ~HttpObject() noexcept = default;
 
     std::string_view header(const std::string_view &name) noexcept {
-        auto it = std::find_if(mHeaders.begin(), mHeaders.end(), [&name, this](Header &it) -> bool {
-            return name == it.first.get(mRaw);
-        });
+        auto it = std::find_if(
+                mHeaders.begin(),
+                mHeaders.end(),
+                [&name, this](Header &it) -> bool {
+                    return name == it.first.get(mRaw);
+                }
+        );
         if (it == mHeaders.end()) {
             return "";
         }
         return it->second.get(mRaw);
     }
 
-    std::vector<std::pair<std::string_view, std::string_view>> headers() noexcept {
+    auto headers() noexcept {
         std::vector<std::pair<std::string_view, std::string_view>> vec(mHeaders.size());
         for (size_t i = 0; i < mHeaders.size(); i ++) {
             auto &header = mHeaders[i];
-            vec[i] = std::make_pair(header.first.get(mRaw), header.second.get(mRaw));
+            vec[i] = std::make_pair(
+                    header.first.get(mRaw),
+                    header.second.get(mRaw)
+            );
         }
         return vec;
     }
 
-    void header(const std::string_view &name, const std::string_view &value) noexcept {
-        auto it = std::find_if(mHeaders.begin(), mHeaders.end(), [&name, this](Header &it) -> bool {
-            return name == it.first.get(mRaw);
-        });
+    HttpObject &header(const std::string_view &name, const std::string_view &value) noexcept {
+        auto it = std::find_if(
+                mHeaders.begin(),
+                mHeaders.end(),
+                [&name, this](Header &it) -> bool {
+                    return name == it.first.get(mRaw);
+                }
+        );
         if (it != mHeaders.end()) {
-            it->second = update(it->second, value);
-            return;
+            update(&it->second, value);
+            return *this;
         }
-        auto newName = update(StringRef(), name);
+        StringRef newName;
+        update(&newName, name);
         trimKey(newName, mRaw);
 
-        mHeaders.emplace_back(newName, update(StringRef(), value));
+        StringRef newValue;
+        update(&newValue, value);
+        mHeaders.emplace_back(newName, newValue);
+        return *this;
     }
 
     [[nodiscard]]
@@ -116,8 +127,9 @@ public:
 
     std::string_view body() noexcept { return mBody.get(mRaw); }
 
-    void body(const std::string_view &newBody) noexcept {
-        mBody = update(mBody, newBody);
+    HttpObject &body(const std::string_view &newBody) noexcept {
+        update(&mBody, newBody);
+        return *this;
     }
 };
 
@@ -128,21 +140,20 @@ private:
     StringRef mPath;
     StringRef mMethod;
 public:
-    void path(const std::string_view &newPath) noexcept {
-        mPath = update(mPath, newPath);
+    HttpRequest &path(const std::string_view &newPath) noexcept {
+        update(&mPath, newPath);
+        return *this;
     }
 
-    void method(const std::string_view &newMethod) noexcept {
-        mMethod = update(mMethod, newMethod);
+    HttpRequest &method(const std::string_view &newMethod) noexcept {
+        update(&mMethod, newMethod);
+        return *this;
     }
 
     std::string_view path() noexcept { return mPath.get(mRaw); }
     std::string_view method() noexcept { return mMethod.get(mRaw); }
 
-    explicit HttpRequest() noexcept {
-        path("/");
-        method("GET");
-    }
+    explicit HttpRequest() noexcept = default;
 };
 
 class HttpResponse: public HttpObject
@@ -171,13 +182,17 @@ public:
     [[nodiscard]]
     HttpCode code() const noexcept { return mCode; }
 
-    void code(HttpCode newCode) noexcept { mCode = newCode; }
+    HttpResponse &code(HttpCode newCode) noexcept {
+        mCode = newCode;
+        return *this;
+    }
 
     [[nodiscard]]
     std::string_view message() noexcept { return mMessage.get(mRaw); }
 
-    void message(const std::string_view &newMessage) noexcept {
-        mMessage = update(mMessage, newMessage);
+    HttpResponse &message(const std::string_view &newMessage) noexcept {
+        update(&mMessage, newMessage);
+        return *this;
     }
 };
 
@@ -197,16 +212,20 @@ protected:
         return at - mData;
     }
 
-    void updateString(StringRef &out, const char *at, size_t length) const noexcept {
+    void updateString(StringRef *out, const char *at, size_t length) const noexcept {
         auto offset = offsetOfData(at);
         // 可能读到不完整的片段
-        if (out.off == INVALID_OFFSET) {
-            out.off = offset;
-            out.len = length;
-            return;
+        if (out->off == INVALID_OFFSET) {
+            out->off = offset;
+            out->len = length;
+        } else {
+            CHECK(out->off + out->len == offset,
+                  "wtf, out->off='%zu', out->len='%zu', offset='%zu'",
+                  out->off, out->len, offset
+            )
+            out->len += length;
         }
-        assert(out.off + out.len == offset);
-        out.len += length;
+        out->cap = out->len;
     }
 
 private:
@@ -246,7 +265,7 @@ private:
             }
         }
         // 可能读到不完整的片段
-        updateString(mCurHeaderName, at, length);
+        updateString(&mCurHeaderName, at, length);
         return 0;
     }
 
@@ -259,7 +278,7 @@ private:
                 return -1;
             }
         }
-        updateString(mCurHeaderValue, at, length);
+        updateString(&mCurHeaderValue, at, length);
         return 0;
     }
 
@@ -282,13 +301,13 @@ private:
             HttpObject::trimKey(it.first, mData);
         }
         if (llhttp_get_upgrade(&mHttpParser)) {
-            return 2;
+            return 2; // 2 会使 llhttp_execute() 返回 HPE_PAUSED_UPGRADE
         }
         return 0;
     }
 
     int on_body(const char *at, size_t length) noexcept {
-        updateString(mBody, at, length);
+        updateString(&mBody, at, length);
         return 0;
     }
 
@@ -305,17 +324,6 @@ private:
         return HPE_PAUSED;
     }
 
-#define LLHTTP_METHOD_BRIDGE(XX) \
-    XX(on_message_begin)  \
-    XX(on_message_complete) \
-    XX(on_header_value_complete) \
-    XX(on_headers_complete)
-
-#define LLHTTP_DATA_METHOD_BRIDGE(XX) \
-    XX(on_header_field) \
-    XX(on_header_value) \
-    XX(on_body)
-
     void initSettings() noexcept {
         llhttp_settings_init(&mSettings);
 #define XX(NAME) \
@@ -323,26 +331,32 @@ private:
             auto self = static_cast<HttpObjectDecoder*>(parser->data); \
             return self->NAME(); \
         };
-            LLHTTP_METHOD_BRIDGE(XX)
+        XX(on_message_begin)
+        XX(on_message_complete)
+        XX(on_header_value_complete)
+        XX(on_headers_complete)
 #undef XX
+
 #define XX(NAME) \
         mSettings.NAME = [](llhttp_t *parser, const char *at, size_t length) -> int { \
             auto self = static_cast<HttpObjectDecoder*>(parser->data); \
             return self->NAME(at, length); \
         };
-            LLHTTP_DATA_METHOD_BRIDGE(XX)
+        XX(on_header_field)
+        XX(on_header_value)
+        XX(on_body)
 #undef XX
-        }
-
-#undef LLHTTP_METHOD_BRIDGE
-#undef LLHTTP_DATA_METHOD_BRIDGE
+    }
 
     llhttp_errno_t decode0(ChannelHandlerContext &ctx, ByteBuf &in) noexcept {
+        if (in.readableBytes() > maxBuffSize) {
+            return HPE_USER;
+        }
         // mData 指向数据开始的指针
         mData = (char *) in.readData();
         auto err = llhttp_execute(
                 &mHttpParser,
-                (char *) in.readData() + mLastDecodedBytes, // [1]
+                mData + mLastDecodedBytes, // [1]
                 in.readableBytes() - mLastDecodedBytes // [1]
         );
         mData = nullptr;
@@ -365,6 +379,7 @@ private:
         auto httpObjectMsg = makeAny<HttpObjectType>();
         auto httpObject = httpObjectMsg->template as<HttpObjectType>();
         if (byteBuf.readableBytes() == httpObjectSize) {
+            httpObject->mRaw.clear();
             httpObject->mRaw.swap(byteBuf);
         } else {
             httpObject->mRaw.writeBytes(byteBuf.readData(), httpObjectSize);
@@ -448,13 +463,15 @@ public: // visible for test
     }
 
 public:
-    static constexpr size_t DEFAULT_MAX_HEADER_NUM = 32;
-    static constexpr size_t DEFAULT_MAX_HEADER_SIZE = 64 * 1024;
-    static constexpr size_t DEFAULT_MAX_BODY_SIZE = 1 * 1024 * 1024;
+    static constexpr size_t DEFAULT_MAX_HEADER_NUM = 64;
+    static constexpr size_t DEFAULT_MAX_HEADER_SIZE = 32 * 1024;
+    static constexpr size_t DEFAULT_MAX_BODY_SIZE = 512 * 1024;
+    static constexpr size_t DEFAULT_MAX_BUFF_SIZE = 2 * 1024 * 1024;
 
     size_t maxHeaderSize = DEFAULT_MAX_HEADER_SIZE;
     size_t maxHeaderNum = DEFAULT_MAX_HEADER_NUM;
     size_t maxBodySize = DEFAULT_MAX_BODY_SIZE;
+    size_t maxBuffSize = DEFAULT_MAX_BUFF_SIZE;
 
     explicit HttpObjectDecoder() noexcept = default;
     NO_COPY(HttpObjectDecoder)
@@ -467,12 +484,12 @@ class HttpRequestDecoder: public HttpObjectDecoder<HttpRequest, HTTP_REQUEST>
     StringRef mMethod;
 
     int on_url(const char *at, size_t length) noexcept {
-        updateString(mPath, at, length);
+        updateString(&mPath, at, length);
         return 0;
     }
 
     int on_method(const char *at, size_t len) noexcept {
-        updateString(mMethod, at, len);
+        updateString(&mMethod, at, len);
         return 0;
     }
 
@@ -506,7 +523,7 @@ class HttpResponseDecoder: public HttpObjectDecoder<HttpResponse, HTTP_RESPONSE>
     StringRef mMessage;
 
     int on_status(const char *at, size_t length) noexcept {
-        updateString(mMessage, at, length);
+        updateString(&mMessage, at, length);
         return 0;
     }
 
@@ -519,18 +536,21 @@ protected:
         };
     }
 
-    void updateHttpObject(hysburg::HttpResponse &httpObject) noexcept override {
+    void updateHttpObject(HttpResponse &httpObject) noexcept override {
         HttpObjectDecoder::updateHttpObject(httpObject);
-        std::swap(httpObject.mMessage, mMessage);
+        std::swap(mMessage, httpObject.mMessage);
     }
+public:
+    explicit HttpResponseDecoder() noexcept = default;
+    NO_COPY(HttpResponseDecoder)
 };
 
 template <typename HttpObjectType>
 class HttpObjectEncoder: public MessageToByteEncoder<HttpObjectType>
 {
 protected:
-    void encode(ChannelHandlerContext &ctx, HttpObjectType &msg, ByteBuf &out) noexcept override
-    {
+    virtual void fixHttpObject(HttpObjectType &msg) noexcept {
+        // 修复 content-length
         auto body = msg.body();
         auto expectedContentLength = std::to_string(body.length());
         auto actuallyContentLength = msg.header("content-length");
@@ -538,6 +558,13 @@ protected:
         if (expectedContentLength != actuallyContentLength) {
             msg.header("content-length", expectedContentLength);
         }
+    }
+
+    void encode(ChannelHandlerContext &ctx, HttpObjectType &msg, ByteBuf &out) noexcept override
+    {
+        // 修复一些不正确的状态
+        fixHttpObject(msg);
+
         for (const auto &it : msg.headers()) {
             out.writeBytes(it.first);
             out.writeBytes(": ");
@@ -545,7 +572,7 @@ protected:
             out.writeBytes("\r\n");
         }
         out.writeBytes("\r\n");
-        out.writeBytes(body.data(), body.length());
+        out.writeBytes(msg.body().data(), msg.body().length());
     }
 };
 
@@ -553,6 +580,16 @@ protected:
 class HttpRequestEncoder: public HttpObjectEncoder<HttpRequest>
 {
 protected:
+    void fixHttpObject(HttpRequest &msg) noexcept override {
+        HttpObjectEncoder::fixHttpObject(msg);
+        if (msg.path().empty()) {
+            msg.path("/");
+        }
+        if (msg.method().empty()) {
+            msg.method("GET");
+        }
+    }
+
     void encode(ChannelHandlerContext &ctx, HttpRequest &msg, ByteBuf &out) noexcept override {
         out.writeBytes(msg.method());
         out.writeBytes(" ");
