@@ -133,23 +133,19 @@ public:
     }
 
     void release() noexcept {
-        mCapacity = 0;
-        mWriteIndex = mReadIndex = 0;
-        Allocator().free(mData);
-        mData = nullptr;
+        grab(nullptr, 0);
     }
 
-    uint8_t *data() const noexcept { return mData; }
+    void *data() const noexcept { return mData; }
     size_t capacity() const noexcept { return mCapacity; }
 
-    uint8_t *readData() const noexcept { return mData + mReadIndex; }
-    uint8_t *writeData() const noexcept { return mData + mWriteIndex; }
+    void *readData() const noexcept { return mData + mReadIndex; }
+    void *writeData() const noexcept { return mData + mWriteIndex; }
 
     size_t readIndex() const noexcept { return mReadIndex; }
     size_t writeIndex() const noexcept { return mWriteIndex; }
 
     size_t readableBytes() const noexcept { return mWriteIndex - mReadIndex; }
-
     size_t writableBytes() const noexcept { return mCapacity - mWriteIndex; }
 
 //    bool empty() const noexcept { return mSize == 0; }
@@ -165,6 +161,9 @@ public:
     void writeIndex(size_t index) noexcept { mWriteIndex = index; }
 
     void clear() noexcept { mReadIndex = mWriteIndex = 0; }
+
+    void offsetReader(ssize_t offset) noexcept { mReadIndex += offset; }
+    void offsetWriter(ssize_t offset) noexcept { mWriteIndex += offset; }
 };
 }
 

@@ -871,22 +871,14 @@ public:
     }
 
     template<typename E, typename ...Args>
-    ServerBootstrap &emplaceChildHandler(Args&&... args) noexcept {
-        auto handler = std::make_shared<E>(std::forward<Args>(args)...);
-        return childHandler(std::move(handler));
-    }
-
-    ServerBootstrap &childHandler(ChannelHandlerPtr childHandler) noexcept {
-        if (childHandler == nullptr) {
-            return *this;
-        }
+    ServerBootstrap &childHandler(Args&&... args) noexcept {
         initAndRegister();
-
+        auto handler = std::make_shared<E>(std::forward<Args>(args)...);
         if (mExecutor->inEventLoop()) {
-            mChannel->pipeline().template emplaceLast<AcceptHandler>(std::move(childHandler));
+            mChannel->pipeline().template emplaceLast<AcceptHandler>(std::move(handler));
         } else {
-            mExecutor->post([channel = mChannel, childHandler]() {
-                channel->pipeline().template emplaceLast<AcceptHandler>(childHandler);
+            mExecutor->post([channel = mChannel, handler]() {
+                channel->pipeline().template emplaceLast<AcceptHandler>(handler);
             });
         }
         return *this;
