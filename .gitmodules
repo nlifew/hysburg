@@ -1,6 +1,0 @@
-[submodule "third_party/picohttpparser"]
-	path = third_party/picohttpparser
-	url = https://github.com/h2o/picohttpparser.git
-[submodule "third_party/llhttp"]
-	path = third_party/llhttp
-	url = https://github.com/nodejs/llhttp.git
