@@ -85,9 +85,13 @@ public:
         }
         mByteBuff.cumulate(*msg->as<ByteBuf>());
 
-        while (mByteBuff.readableBytes() > 0) {
+        while (true) {
             const auto rIdx = mByteBuff.readIndex();
             const auto wIdx = mByteBuff.writeIndex();
+
+            if (rIdx >= wIdx) {
+                break;
+            }
 
             callDecode(ctx, mByteBuff, mOutList);
 
@@ -99,7 +103,7 @@ public:
             }
 
             // 解析出了数据，但 readIndex/readableBytes 没有变化，视为异常情况
-            CHECK(mByteBuff.readIndex() != rIdx, "no bytes consumed but has data !")
+            CHECK(mByteBuff.readableBytes() != (wIdx - rIdx), "no bytes consumed but has data !")
 
             for (auto &item: mOutList) {
                 ctx.fireChannelRead(std::move(item));

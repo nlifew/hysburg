@@ -758,11 +758,8 @@ public:
         return *this;
     }
 
-    template<typename E, typename ...Args>
-    Bootstrap &handler(Args&&... args) noexcept {
+    Bootstrap &handler(ChannelHandlerPtr handler) noexcept {
         initAndRegister();
-        auto handler = std::make_shared<E>(std::forward<Args>(args)...);
-
         if (mChannel->executor()->inEventLoop()) {
             mChannel->pipeline().addLast(std::move(handler));
             return *this;
@@ -771,6 +768,11 @@ public:
             channel->pipeline().addLast(handler);
         });
         return *this;
+    }
+
+    template<typename E, typename ...Args>
+    Bootstrap &emplaceHandler(Args&&... args) noexcept {
+        return handler(std::make_shared<E>(std::forward<Args>(args)...));
     }
 
     FuturePtr<void> bind(SocketAddress &address) noexcept {

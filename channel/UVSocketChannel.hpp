@@ -15,7 +15,7 @@ class UVSocketChannel: public Channel
     uv_connect_t mConn {};
 
     void handleConnectResult(int result) noexcept {
-        LOGE("connect to '%s', result='%s(%d)'",
+        LOGI("connect to '%s', result='%s(%d)'",
              Net::stringOf(&mRemoteAddress.addr).c_str(),
              uv_err_name(result), result
         );

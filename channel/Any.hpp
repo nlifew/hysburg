@@ -62,6 +62,12 @@ namespace hysburg
         ::new (ptr->buff) T(std::forward<Args>(args)...);
         return AnyPtr(ptr);
     }
+
+    template <typename T, typename ...Args>
+    T* makeAnyIn(AnyPtr &out, Args&&... args) {
+        out = makeAny<T>(std::forward<Args>(args)...);
+        return out->as<T>();
+    }
 }
 
 

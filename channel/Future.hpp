@@ -24,24 +24,23 @@ PromisePtr<T> makePromise(EventLoopPtr loop) noexcept {
 
 template <typename T>
 class Future: public std::enable_shared_from_this<Future<T>> {
-    struct Tuple {
+    struct Listener {
         int id = 0;
         std::function<void(Future<T>&)> cb;
-
-        explicit Tuple(int _id, typeof(cb) _cb) noexcept:
-            id(_id), cb(std::move(_cb)){
+        explicit Listener(int _id, std::function<void(Future<T>&)> _cb)
+            : id(_id), cb(std::move(_cb)) {
         }
     };
 
     enum State {
-        INIT = 0,
-        SUCCESS = 1,
-        FAILURE = 2,
-        CANCELED = 3,
+        INIT,
+        SUCCESS,
+        FAILURE,
+        CANCELED,
     };
 
     std::atomic<State> mState { State::INIT };
-    std::vector<Tuple> mListeners;
+    std::vector<Listener> mListeners;
     EventLoopPtr mExecutor;
 
     std::mutex mMutex;
@@ -51,7 +50,7 @@ class Future: public std::enable_shared_from_this<Future<T>> {
     using ValueType = std::conditional_t<std::is_void_v<T>, std::monostate, T>;
     ValueType mValue {};
 
-    void notifyListeners(std::vector<Tuple> listeners) noexcept {
+    void notifyListeners(std::vector<Listener> listeners) noexcept {
         if (listeners.empty()) {
             return;
         }
@@ -62,8 +61,10 @@ class Future: public std::enable_shared_from_this<Future<T>> {
             return;
         }
         // 现在比较麻烦，我们得在 eventLoop 中执行回调
-        auto self = std::enable_shared_from_this<Future<T>>::shared_from_this();
-        mExecutor->post([self = self, listeners]() {
+        mExecutor->post([
+                self = Future<T>::shared_from_this(),
+                listeners = std::move(listeners)
+        ]() {
             for (auto &it : listeners) {
                 if (it.cb) { it.cb(*self); }
             }
@@ -71,16 +72,23 @@ class Future: public std::enable_shared_from_this<Future<T>> {
     }
 
     bool trySetResult(State result, ValueType value) noexcept {
-        std::unique_lock lockGuard(mMutex);
-        if (mState.load(std::memory_order_acquire) != State::INIT) {
+        // 快速返回，这是一个“写入前”的检查，不是“读取后”的消费
+        if (mState.load(std::memory_order_relaxed) != State::INIT) {
             return false;
         }
+        std::unique_lock lockGuard(mMutex);
+        // double check
+        if (mState.load(std::memory_order_relaxed) != State::INIT) {
+            return false;
+        }
+        // 先设置 mValue，再使用 release 语义发布
         mValue = std::move(value);
         mState.store(result, std::memory_order_release);
         mCond.notify_all();
-        std::vector<Tuple> listeners(std::move(mListeners));
+
+        std::vector<Listener> tmp(std::move(mListeners));
         lockGuard.unlock();
-        notifyListeners(std::move(listeners));
+        notifyListeners(std::move(tmp));
         return true;
     }
 
@@ -96,10 +104,10 @@ public:
 
     NO_COPY(Future)
 
-    ~Future() noexcept {
+    ~Future() noexcept = default; /* {
         std::unique_lock lockGuard(mMutex);
         CHECK(mListeners.empty(), "active listeners !")
-    }
+    } */
 
     [[nodiscard]]
     bool isSuccess() const noexcept { return mState.load(std::memory_order_acquire) == State::SUCCESS; }
@@ -111,19 +119,16 @@ public:
     bool isCanceled() const noexcept { return mState.load(std::memory_order_acquire) == State::CANCELED; }
 
     [[nodiscard]]
-    bool isDone() const noexcept {
-        auto state = mState.load(std::memory_order_acquire);
-        return state == State::SUCCESS || mState == State::FAILURE;
-    }
+    bool isDone() const noexcept { return mState.load(std::memory_order_acquire) != State::INIT; }
 
     void await() noexcept {
         std::unique_lock lockGuard(mMutex);
-        while (!isDone() && !isCanceled()) {
+        while (!isDone()) {
             mCond.wait(lockGuard);
         }
     }
 
-    T sync() noexcept {
+    void sync() noexcept {
         await();
         CHECK(isSuccess(), "not success !")
     }
@@ -136,30 +141,22 @@ public:
 
     int addListener(std::function<void(Future<T>&)> cb) noexcept {
         std::unique_lock lockGuard(mMutex);
-        auto &tuple = mListeners.emplace_back(++mListenerId, std::move(cb));
+        auto id = mListeners.emplace_back(mListenerId++, std::move(cb)).id;
         if (isDone()) {
-            std::vector<Tuple> listeners(std::move(mListeners));
+            std::vector<Listener> tmp(std::move(mListeners));
             lockGuard.unlock();
-            notifyListeners(std::move(listeners));
+            notifyListeners(std::move(tmp));
         }
-        return tuple.id;
+        return id;
     }
 
-    void removeListener(int id, void (*cb)(void *)) noexcept {
+    void removeListener(int id) noexcept {
         std::unique_lock lockGuard(mMutex);
-        bool found = false;
-        void *data = nullptr;
         for (auto it = mListeners.begin(); it != mListeners.end(); ++it) {
             if (it->id == id) {
-                found = true;
-                data = it->data;
                 mListeners.erase(it);
                 break;
             }
-        }
-        lockGuard.unlock();
-        if (found && cb != nullptr) {
-            cb(data);
         }
     }
 };

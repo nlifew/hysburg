@@ -234,10 +234,11 @@ class EventLoopGroup: public std::enable_shared_from_this<EventLoopGroup> {
     std::unique_ptr<std::once_flag[]> mOnceFlags;
 
 public:
-    explicit EventLoopGroup(int size) noexcept: mSize(size) {
+    explicit EventLoopGroup(int size) noexcept {
+        mSize = std::max(1, size);
         // std::once_flag 没法移动，不能放到 vector 里
-        mEventLoops = std::make_unique<EventLoopPtr[]>(size);
-        mOnceFlags = std::make_unique<std::once_flag[]>(size);
+        mEventLoops = std::make_unique<EventLoopPtr[]>(mSize);
+        mOnceFlags = std::make_unique<std::once_flag[]>(mSize);
     }
 
     NO_COPY(EventLoopGroup)
