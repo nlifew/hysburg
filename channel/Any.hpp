@@ -17,22 +17,16 @@ struct Any
     const std::type_info &type;
     char buff[0];
 
-    explicit Any(const std::type_info &tp) noexcept: type(tp)
+    explicit Any(const std::type_info &tp): type(tp)
     {}
 
     NO_COPY(Any)
 
     template<typename T>
-    T* as() noexcept
-    {
-        return reinterpret_cast<T*>(buff);
-    }
+    T* as() { return reinterpret_cast<T*>(buff); }
 
     template<typename T>
-    T* is() noexcept
-    {
-        return LIKELY(typeid(T) == type) ? reinterpret_cast<T*>(buff) : nullptr;
-    }
+    T* is() { return LIKELY(typeid(T) == type) ? reinterpret_cast<T*>(buff) : nullptr; }
 };
 
 }
@@ -43,7 +37,7 @@ namespace std
     template <>
     struct default_delete<hysburg::Any>
     {
-        void operator()(hysburg::Any *any) const noexcept
+        void operator()(hysburg::Any *any) const
         {
             any->deleter(any->buff);
             free(any);

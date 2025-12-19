@@ -14,13 +14,13 @@ namespace hysburg
 
 struct ChannelInboundHandler : public ChannelHandler
 {
-    explicit ChannelInboundHandler() noexcept: ChannelHandler(ChannelHandler::FLAG_INBOUNDS) {
+    explicit ChannelInboundHandler(): ChannelHandler(ChannelHandler::FLAG_INBOUNDS) {
     }
 };
 
 struct ChannelOutboundHandler : public ChannelHandler
 {
-    explicit ChannelOutboundHandler() noexcept: ChannelHandler(ChannelHandler::FLAG_OUTBOUNDS) {
+    explicit ChannelOutboundHandler(): ChannelHandler(ChannelHandler::FLAG_OUTBOUNDS) {
     }
 };
 
@@ -28,7 +28,7 @@ struct ChannelDuplexHandler : public ChannelHandler
 {
     static constexpr int FLAG = ChannelHandler::FLAG_INBOUNDS | ChannelHandler::FLAG_OUTBOUNDS;
 
-    explicit ChannelDuplexHandler() noexcept: ChannelHandler(FLAG) {
+    explicit ChannelDuplexHandler(): ChannelHandler(FLAG) {
     }
 };
 
@@ -39,7 +39,7 @@ private:
     using FactoryType = std::function<void(Channel &)>;
     FactoryType mFactory;
 protected:
-    void handlerAdded(ChannelHandlerContext &ctx) noexcept override
+    void handlerAdded(ChannelHandlerContext &ctx) override
     {
         if (mFactory != nullptr) {
             mFactory(ctx.channel());
@@ -52,7 +52,7 @@ protected:
     }
 
 public:
-    explicit ChannelInitializer(FactoryType factory) noexcept:
+    explicit ChannelInitializer(FactoryType factory):
         mFactory(std::move(factory))
     {}
 
@@ -67,17 +67,17 @@ private:
     std::vector<AnyPtr> mOutList;
 
 protected:
-    virtual void decode(ChannelHandlerContext &ctx, ByteBuf &in, std::vector<AnyPtr> &out) noexcept = 0;
+    virtual void decode(ChannelHandlerContext &ctx, ByteBuf &in, std::vector<AnyPtr> &out) = 0;
 
-    virtual void callDecode(ChannelHandlerContext &ctx, ByteBuf &in, std::vector<AnyPtr> &out) noexcept {
+    virtual void callDecode(ChannelHandlerContext &ctx, ByteBuf &in, std::vector<AnyPtr> &out) {
         decode(ctx, in, out);
     }
 
-//    virtual void discardReadBytes(ByteBuf &in) noexcept {
+//    virtual void discardReadBytes(ByteBuf &in) {
 //        in.discardReadBytes();
 //    }
 public:
-    void channelRead(ChannelHandlerContext &ctx, AnyPtr msg) noexcept override
+    void channelRead(ChannelHandlerContext &ctx, AnyPtr msg) override
     {
         if (!msg->is<ByteBuf>()) {
             ctx.fireChannelRead(std::move(msg));
@@ -116,7 +116,7 @@ public:
         }
     }
 
-    void handlerRemoved(ChannelHandlerContext &ctx) noexcept override
+    void handlerRemoved(ChannelHandlerContext &ctx) override
     {
         // 把剩下的未解析的数据发出去 FIXME 这里得区分下是不是在 decode() 吧……
         if (ctx.pipeline().isActive() && mByteBuff.readableBytes() > 0) {
@@ -127,7 +127,7 @@ public:
     }
 
 public:
-    explicit ByteToMessageDecoder() noexcept = default;
+    explicit ByteToMessageDecoder() = default;
     NO_COPY(ByteToMessageDecoder)
 };
 
@@ -137,17 +137,17 @@ public:
 //    int mCheckpoint = -1;
 //    ByteBuf *mUsingByteBuf = nullptr;
 //protected:
-//    State state() const noexcept { return mState; }
+//    State state() const { return mState; }
 //
-//    void state(State state) noexcept { mState = std::move(state); }
+//    void state(State state) { mState = std::move(state); }
 //
-//    void checkpoint(State state) noexcept {
+//    void checkpoint(State state) {
 //        assert(mUsingByteBuf != nullptr);
 //        mCheckpoint = mUsingByteBuf->readIndex();
 //        mState = state;
 //    }
 //
-//    void callDecode(ChannelHandlerContext &ctx, ByteBuf &in, std::vector<AnyPtr> &out) noexcept override {
+//    void callDecode(ChannelHandlerContext &ctx, ByteBuf &in, std::vector<AnyPtr> &out) override {
 //        assert(mUsingByteBuf == nullptr);
 //        mUsingByteBuf = &in;
 //
@@ -161,7 +161,7 @@ public:
 //        mUsingByteBuf = nullptr;
 //    }
 //
-//    void discardReadBytes(hysburg::ByteBuf &in) noexcept override {
+//    void discardReadBytes(hysburg::ByteBuf &in) override {
 //        auto readIndex = in.readIndex();
 //        ByteToMessageDecoder::discardReadBytes(in);
 //        if (mCheckpoint >= 0) {
@@ -171,9 +171,9 @@ public:
 //    }
 //
 //public:
-//    explicit ReplayingDecoder() noexcept = default;
+//    explicit ReplayingDecoder() = default;
 //
-//    explicit ReplayingDecoder(State state) noexcept: mState(state) {
+//    explicit ReplayingDecoder(State state): mState(state) {
 //    }
 //    NO_COPY(ReplayingDecoder)
 //};
@@ -183,23 +183,23 @@ template<typename MsgType>
 class MessageToByteEncoder: public ChannelOutboundHandler
 {
     template<typename T>
-    void callEncode(ChannelHandlerContext &ctx, Any &msg, ByteBuf &out) noexcept {
+    void callEncode(ChannelHandlerContext &ctx, Any &msg, ByteBuf &out) {
         encode(ctx, *msg.as<T>(), out);
     }
 
     template<>
-    void callEncode<Any>(ChannelHandlerContext &ctx, Any &msg, ByteBuf &out) noexcept {
+    void callEncode<Any>(ChannelHandlerContext &ctx, Any &msg, ByteBuf &out) {
         encode(ctx, msg, out);
     }
 
 protected:
-    virtual bool acceptOutboundMessage(Any &msg) noexcept {
+    virtual bool acceptOutboundMessage(Any &msg) {
         return msg.is<MsgType>();
     }
 
-    virtual void encode(ChannelHandlerContext &ctx, MsgType &msg, ByteBuf &out) noexcept = 0;
+    virtual void encode(ChannelHandlerContext &ctx, MsgType &msg, ByteBuf &out) = 0;
 
-    void write(ChannelHandlerContext &ctx, AnyPtr msg, PromisePtr<void> promise) noexcept override {
+    void write(ChannelHandlerContext &ctx, AnyPtr msg, PromisePtr<void> promise) override {
         if (!acceptOutboundMessage(*msg)) {
             ctx.write(std::move(msg), std::move(promise));
             return;
@@ -209,7 +209,7 @@ protected:
         ctx.write(std::move(byteBuf), std::move(promise));
     }
 public:
-    explicit MessageToByteEncoder() noexcept = default;
+    explicit MessageToByteEncoder() = default;
     NO_COPY(MessageToByteEncoder)
 };
 
@@ -220,10 +220,10 @@ protected:
     using MessageList = std::vector<AnyPtr>;
     virtual void decode(ChannelHandlerContext &ctx, Any &msg, MessageList &out) = 0;
     virtual void encode(ChannelHandlerContext &ctx, Any &msg, MessageList &out) = 0;
-    virtual bool acceptInboundMessage(Any &msg) const noexcept = 0;
-    virtual bool acceptOutboundMessage(Any &msg) const noexcept = 0;
+    virtual bool acceptInboundMessage(Any &msg) const = 0;
+    virtual bool acceptOutboundMessage(Any &msg) const = 0;
 
-    void channelRead(ChannelHandlerContext &ctx, AnyPtr msg) noexcept override {
+    void channelRead(ChannelHandlerContext &ctx, AnyPtr msg) override {
         if (!acceptInboundMessage(*msg)) {
             ctx.fireChannelRead(std::move(msg));
             return;
@@ -235,7 +235,7 @@ protected:
         }
     }
 
-    void write(ChannelHandlerContext &ctx, AnyPtr msg, PromisePtr<void> promise) noexcept override
+    void write(ChannelHandlerContext &ctx, AnyPtr msg, PromisePtr<void> promise) override
     {
         if (!acceptOutboundMessage(*msg)) {
             ctx.write(std::move(msg), std::move(promise));
@@ -248,7 +248,7 @@ protected:
         }
     }
 public:
-    explicit MessageToMessageCodec() noexcept = default;
+    explicit MessageToMessageCodec() = default;
     NO_COPY(MessageToMessageCodec)
 };
 
@@ -258,7 +258,7 @@ class CombinedChannelDuplexHandler: public ChannelDuplexHandler
     ChannelHandlerPtr mOutboundHandler;
 
 protected:
-    void init(ChannelHandlerPtr in, ChannelHandlerPtr out) noexcept
+    void init(ChannelHandlerPtr in, ChannelHandlerPtr out)
     {
         CHECK(mInboundHandler == nullptr && mOutboundHandler == nullptr, "duplicated call")
         CHECK(in != nullptr && out != nullptr, "nullptr in='%p', out='%p'", in.get(), out.get())
@@ -270,7 +270,7 @@ protected:
         mOutboundHandler = std::move(out);
     }
 
-    void handlerAdded(ChannelHandlerContext &ctx) noexcept override
+    void handlerAdded(ChannelHandlerContext &ctx) override
     {
         if (mInboundHandler == nullptr) {
             return;
@@ -278,7 +278,7 @@ protected:
         mInboundHandler->handlerAdded(ctx);
     }
 
-    void channelActive(ChannelHandlerContext &ctx) noexcept override
+    void channelActive(ChannelHandlerContext &ctx) override
     {
         if (mInboundHandler == nullptr) {
             ctx.fireChannelActive();
@@ -287,7 +287,7 @@ protected:
         mInboundHandler->channelActive(ctx);
     }
 
-    void channelRead(ChannelHandlerContext &ctx, AnyPtr msg) noexcept override
+    void channelRead(ChannelHandlerContext &ctx, AnyPtr msg) override
     {
         if (mInboundHandler == nullptr) {
             ctx.fireChannelRead(std::move(msg));
@@ -296,7 +296,7 @@ protected:
         mInboundHandler->channelRead(ctx, std::move(msg));
     }
 
-    void userEventTriggered(ChannelHandlerContext &ctx, AnyPtr msg) noexcept override
+    void userEventTriggered(ChannelHandlerContext &ctx, AnyPtr msg) override
     {
         if (mInboundHandler == nullptr) {
             ctx.fireUserEvent(std::move(msg));
@@ -305,7 +305,7 @@ protected:
         mInboundHandler->userEventTriggered(ctx, std::move(msg));
     }
 
-    void channelInactive(ChannelHandlerContext &ctx) noexcept override
+    void channelInactive(ChannelHandlerContext &ctx) override
     {
         if (mInboundHandler == nullptr) {
             ctx.fireChannelInactive();
@@ -314,7 +314,7 @@ protected:
         mInboundHandler->channelInactive(ctx);
     }
 
-    void handlerRemoved(ChannelHandlerContext &ctx) noexcept override
+    void handlerRemoved(ChannelHandlerContext &ctx) override
     {
         if (mInboundHandler == nullptr) {
             return;
@@ -322,7 +322,7 @@ protected:
         mInboundHandler->handlerRemoved(ctx);
     }
 
-    void write(ChannelHandlerContext &ctx, AnyPtr msg, PromisePtr<void> promise) noexcept override
+    void write(ChannelHandlerContext &ctx, AnyPtr msg, PromisePtr<void> promise) override
     {
         if (mOutboundHandler == nullptr) {
             ctx.write(std::move(msg), std::move(promise));
@@ -331,7 +331,7 @@ protected:
         mOutboundHandler->write(ctx, std::move(msg), std::move(promise));
     }
 
-    void close(ChannelHandlerContext &ctx) noexcept override
+    void close(ChannelHandlerContext &ctx) override
     {
         if (mOutboundHandler == nullptr) {
             ctx.close();
@@ -341,9 +341,9 @@ protected:
     }
 
 public:
-    explicit CombinedChannelDuplexHandler() noexcept = default;
+    explicit CombinedChannelDuplexHandler() = default;
 
-    explicit CombinedChannelDuplexHandler(ChannelHandlerPtr inbound, ChannelHandlerPtr outbound) noexcept
+    explicit CombinedChannelDuplexHandler(ChannelHandlerPtr inbound, ChannelHandlerPtr outbound)
     {
         init(std::move(inbound), std::move(outbound));
     }
@@ -354,19 +354,19 @@ template <typename MsgType>
 class SimpleInboundChannelHandler: public ChannelInboundHandler
 {
     template<typename T>
-    bool isType(Any &msg) const noexcept { return msg.is<T>(); }
+    bool isType(Any &msg) const { return msg.is<T>(); }
 
     template<>
-    bool isType<Any>(Any &msg) const noexcept { return true; }
+    bool isType<Any>(Any &msg) const { return true; }
 
 protected:
-    virtual bool acceptInboundMessage(Any &msg) noexcept {
+    virtual bool acceptInboundMessage(Any &msg) {
         return isType<MsgType>(msg);
     }
 
-    virtual void channelRead0(ChannelHandlerContext &ctx, MsgType &msg) noexcept = 0;
+    virtual void channelRead0(ChannelHandlerContext &ctx, MsgType &msg) = 0;
 
-    void channelRead(ChannelHandlerContext &ctx, AnyPtr msg) noexcept override
+    void channelRead(ChannelHandlerContext &ctx, AnyPtr msg) override
     {
         if (!acceptInboundMessage(*msg)) {
             ctx.fireChannelRead(std::move(msg));
@@ -375,7 +375,7 @@ protected:
         channelRead0(ctx, *msg->as<MsgType>());
     }
 public:
-    explicit SimpleInboundChannelHandler() noexcept = default;
+    explicit SimpleInboundChannelHandler() = default;
     NO_COPY(SimpleInboundChannelHandler)
 };
 

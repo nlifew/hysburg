@@ -62,7 +62,7 @@ struct Socks5CommandBase
     uint16_t port = 0;
 
     [[nodiscard]]
-    std::string toString() const noexcept
+    std::string toString() const
     {
         std::string str = addrToString();
         char tmp[16] = { 0 };
@@ -72,7 +72,7 @@ struct Socks5CommandBase
     }
 
     [[nodiscard]]
-    std::string addrToString() const noexcept
+    std::string addrToString() const
     {
         switch (type) {
             case Socks5AddressType::IPV4: {
@@ -116,8 +116,8 @@ struct Socks5CommandResponse: Socks5CommandBase
 {
     Socks5Reply reply = Socks5Reply::SUCCESS;
 
-    Socks5CommandResponse() noexcept = default;
-    explicit Socks5CommandResponse(Socks5Reply reply) noexcept
+    Socks5CommandResponse() = default;
+    explicit Socks5CommandResponse(Socks5Reply reply)
         : reply(reply) {
     }
 };
@@ -132,9 +132,9 @@ protected:
     static constexpr int ERRNO_FAILURE = -1;
     static constexpr int ERRNO_CONTINUE = -2;
 
-    virtual int decodeSocks5Msg(MsgTypeName &socks5Msg, ByteBuf &in) noexcept = 0;
+    virtual int decodeSocks5Msg(MsgTypeName &socks5Msg, ByteBuf &in) = 0;
 
-    void decode(ChannelHandlerContext &, ByteBuf &in, std::vector<AnyPtr> &out) noexcept override
+    void decode(ChannelHandlerContext &, ByteBuf &in, std::vector<AnyPtr> &out) override
     {
         if (mErrno != ERRNO_CONTINUE) {
             AnyPtr any;
@@ -167,7 +167,7 @@ protected:
 
 class Socks5InitRequestDecoder: public Socks5MsgDecoder<Socks5InitialRequest>
 {
-    int decodeSocks5Msg(Socks5InitialRequest &socks5Msg, ByteBuf &in) noexcept override
+    int decodeSocks5Msg(Socks5InitialRequest &socks5Msg, ByteBuf &in) override
     {
         // ver
         if (auto version = in.readByte(); version != SocksVersion::_5) {
@@ -189,13 +189,13 @@ class Socks5InitRequestDecoder: public Socks5MsgDecoder<Socks5InitialRequest>
     }
 
 public:
-    explicit Socks5InitRequestDecoder() noexcept = default;
+    explicit Socks5InitRequestDecoder() = default;
     NO_COPY(Socks5InitRequestDecoder)
 };
 
 class Socks5InitResponseDecoder: public Socks5MsgDecoder<Socks5InitialResponse>
 {
-    int decodeSocks5Msg(Socks5InitialResponse &socks5Msg, ByteBuf &in) noexcept override
+    int decodeSocks5Msg(Socks5InitialResponse &socks5Msg, ByteBuf &in) override
     {
         // ver
         if (auto version = in.readByte(); version != SocksVersion::_5) {
@@ -210,19 +210,19 @@ class Socks5InitResponseDecoder: public Socks5MsgDecoder<Socks5InitialResponse>
         return ERRNO_OK;
     }
 public:
-    explicit Socks5InitResponseDecoder() noexcept = default;
+    explicit Socks5InitResponseDecoder() = default;
     NO_COPY(Socks5InitResponseDecoder)
 };
 
 template<typename MsgTypeName>
 class Socks5CommandDecoder: public Socks5MsgDecoder<MsgTypeName>
 {
-    void decodeCmdOrReply(Socks5CommandRequest &request, ByteBuf &in) noexcept
+    void decodeCmdOrReply(Socks5CommandRequest &request, ByteBuf &in)
     {
         request.cmd = static_cast<Socks5Command>(in.readByte());
     }
 
-    void decodeCmdOrReply(Socks5CommandResponse &response, ByteBuf &in) noexcept
+    void decodeCmdOrReply(Socks5CommandResponse &response, ByteBuf &in)
     {
         response.reply = static_cast<Socks5Reply>(in.readByte());
     }
@@ -231,7 +231,7 @@ class Socks5CommandDecoder: public Socks5MsgDecoder<MsgTypeName>
     using Socks5MsgDecoder<MsgTypeName>::ERRNO_OK;
     using Socks5MsgDecoder<MsgTypeName>::ERRNO_CONTINUE;
 
-    int decodeSocks5Msg(MsgTypeName &socks5Msg, ByteBuf &in) noexcept override
+    int decodeSocks5Msg(MsgTypeName &socks5Msg, ByteBuf &in) override
     {
         // ver
         if (auto ver = in.readByte(); ver != SocksVersion::_5) {
@@ -313,7 +313,7 @@ class Socks5MsgEncoder: public MessageToByteEncoder<Any>
         Type_Socks5CommandResponse,
     };
 
-    static SupportedType checkType(Any &msg) noexcept
+    static SupportedType checkType(Any &msg)
     {
         if (msg.type == typeid(Socks5InitialRequest)) {
             return Type_Socks5InitialRequest;
@@ -332,12 +332,12 @@ class Socks5MsgEncoder: public MessageToByteEncoder<Any>
 
     SupportedType mMsgType = Type_Unsupported;
 
-    bool acceptOutboundMessage(Any &msg) noexcept override
+    bool acceptOutboundMessage(Any &msg) override
     {
         return (mMsgType = checkType(msg)) != Type_Unsupported;
     }
 
-    void encode(ChannelHandlerContext &, Any &msg, ByteBuf &out) noexcept override
+    void encode(ChannelHandlerContext &, Any &msg, ByteBuf &out) override
     {
         out.writeByte(SocksVersion::_5);
 
@@ -386,7 +386,7 @@ class Socks5MsgEncoder: public MessageToByteEncoder<Any>
         }
     }
 public:
-    explicit Socks5MsgEncoder() noexcept = default;
+    explicit Socks5MsgEncoder() = default;
     NO_COPY(Socks5MsgEncoder)
 };
 

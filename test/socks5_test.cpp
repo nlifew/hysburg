@@ -8,12 +8,12 @@ using namespace hysburg;
 
 struct Socks5InitRequestHandler: SimpleInboundChannelHandler<Socks5InitialRequest> {
 
-    void channelActive(hysburg::ChannelHandlerContext &ctx) noexcept override {
+    void channelActive(hysburg::ChannelHandlerContext &ctx) override {
         ctx.fireChannelActive();
         ctx.channel().option(ChannelOption::NO_DELAY, 1);
     }
 
-    void channelRead0(ChannelHandlerContext &ctx, Socks5InitialRequest &msg) noexcept override {
+    void channelRead0(ChannelHandlerContext &ctx, Socks5InitialRequest &msg) override {
         LOGD("Socks5InitRequestHandler: read !");
         if (!msg.success) {
             ctx.close();
@@ -33,7 +33,7 @@ struct ConnectAddress {
 struct Socks5CommandRequestHandler: SimpleInboundChannelHandler<Socks5CommandRequest> {
 
 
-    void channelRead0(ChannelHandlerContext &ctx, Socks5CommandRequest &msg) noexcept override {
+    void channelRead0(ChannelHandlerContext &ctx, Socks5CommandRequest &msg) override {
         LOGD("Socks5CommandRequestHandler: read !");
         if (!msg.success) {
             ctx.close();
@@ -65,7 +65,7 @@ struct RelayHandler: ChannelInboundHandler {
     ChannelHandlerContext *otherCtx = nullptr;
     ByteBuf tmpInputBuf;
 
-    void channelActive(ChannelHandlerContext &ctx) noexcept override {
+    void channelActive(ChannelHandlerContext &ctx) override {
         ctx.fireChannelActive();
 
         thisCtx = &ctx;
@@ -77,13 +77,13 @@ struct RelayHandler: ChannelInboundHandler {
         }
     }
 
-    void channelRead(ChannelHandlerContext &ctx, AnyPtr msg) noexcept override {
+    void channelRead(ChannelHandlerContext &ctx, AnyPtr msg) override {
         if (otherCtx != nullptr) {
             otherCtx->writeAndFlush(std::move(msg));
         }
     }
 
-    void channelInactive(ChannelHandlerContext &ctx) noexcept override {
+    void channelInactive(ChannelHandlerContext &ctx) override {
         ctx.fireChannelInactive();
 
         thisCtx = nullptr;
@@ -113,7 +113,7 @@ struct MyHandler: ChannelInboundHandler {
     FuturePtr<void> connectFuture;
     int connectListenerId = -1;
 
-    void channelRead(ChannelHandlerContext &ctx, AnyPtr msg) noexcept override {
+    void channelRead(ChannelHandlerContext &ctx, AnyPtr msg) override {
         if (msg->is<ConnectAddress>()) {
             auto tmp = msg->as<ConnectAddress>();
             startConnect(ctx, tmp->addr, tmp->port);
@@ -154,7 +154,7 @@ struct MyHandler: ChannelInboundHandler {
         ctx.writeAndFlush(std::move(any));
     }
 
-    void channelInactive(ChannelHandlerContext &ctx) noexcept override {
+    void channelInactive(ChannelHandlerContext &ctx) override {
         ctx.fireChannelInactive();
 
         if (connectListenerId > 0 && connectFuture != nullptr) {

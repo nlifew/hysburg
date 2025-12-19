@@ -13,7 +13,7 @@ link_directories(/usr/local/lib)
 add_subdirectory(test)
 
 add_subdirectory(third_party)
-add_compile_options("-Wall" "-Wextra" "-Werror" "-Wno-unused-parameter")
+add_compile_options("-Wall" "-Wextra" "-Werror" "-fno-exceptions" "-Wno-unused-parameter")
 
 add_library(
         runtime

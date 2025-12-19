@@ -14,7 +14,7 @@ class UVSocketChannel: public Channel
     uv_tcp_t mTcp {};
     uv_connect_t mConn {};
 
-    void handleConnectResult(int result) noexcept {
+    void handleConnectResult(int result) {
         LOGI("connect to '%s', result='%s(%d)'",
              Net::stringOf(&mRemoteAddress.addr).c_str(),
              uv_err_name(result), result
@@ -26,7 +26,7 @@ class UVSocketChannel: public Channel
         activePipeline(mConnectPromise);
     }
 
-    virtual void activePipeline(const PromisePtr<void> &promise) noexcept {
+    virtual void activePipeline(const PromisePtr<void> &promise) {
         // 更新 tcp 两端地址
         int localSockLen = sizeof(mLocalAddress);
         uv_tcp_getsockname(&mTcp, &mLocalAddress.addr, &localSockLen);
@@ -80,7 +80,7 @@ class UVSocketChannel: public Channel
 
 protected:
 
-    void doRegister() noexcept override {
+    void doRegister() override {
         mTcp.data = this;
         mConn.data = this;
         auto ret = uv_tcp_init(mExecutor->handle(), &mTcp);
@@ -92,12 +92,12 @@ protected:
         setResult(true, mRegisterPromise);
     }
 
-    void doBind() noexcept override {
+    void doBind() override {
         auto ret = uv_tcp_bind(&mTcp, &mLocalAddress.addr, 0);
         setResult(ret == 0, mBindPromise);
     }
 
-    void doConnect() noexcept override {
+    void doConnect() override {
         auto ret = uv_tcp_connect(&mConn, &mTcp, &mRemoteAddress.addr, [](uv_connect_t* conn, int status) {
             auto self = static_cast<UVSocketChannel*>(conn->data);
             self->handleConnectResult(status);
@@ -107,7 +107,7 @@ protected:
         }
     }
 
-    void doOption(hysburg::ChannelOption key, int value) noexcept override {
+    void doOption(hysburg::ChannelOption key, int value) override {
         switch (key) {
             case ChannelOption::KEEP_ALIVE:
                 uv_tcp_keepalive(&mTcp, value, 1);
@@ -124,7 +124,7 @@ protected:
     using WriteOnce = std::pair<AnyPtr, PromisePtr<void>>;
     std::vector<WriteOnce> mWriteQueue;
 
-    void doWrite(hysburg::AnyPtr msg, PromisePtr<void> promise) noexcept override {
+    void doWrite(hysburg::AnyPtr msg, PromisePtr<void> promise) override {
         if (UNLIKELY(!msg->is<ByteBuf>())) {
             LOGW("unknown msg type: '%s'", msg->type.name());
             return;
@@ -138,7 +138,7 @@ protected:
         std::vector<WriteOnce> msgQueue;
     };
 
-    void doFlush() noexcept override {
+    void doFlush() override {
         auto event = new WriteEvent;
         event->req.data = event;
         event->msgQueue.swap(mWriteQueue);
@@ -170,7 +170,7 @@ protected:
         }
     }
 
-    void doReopen(int reopenFd) noexcept {
+    void doReopen(int reopenFd) {
         auto ret = uv_tcp_open(&mTcp, reopenFd);
         if (ret != 0) {
             doClose();
@@ -179,11 +179,11 @@ protected:
         activePipeline(nullptr);
     }
 
-    void doListen(int backlog) noexcept override {
+    void doListen(int backlog) override {
         setResult(false, mListenPromise);
     }
 
-    void doClose() noexcept override {
+    void doClose() override {
         if (!mRegisterPromise->retain().isSuccess()) {
             setResult(true, mConnectPromise);
             return;
@@ -203,14 +203,14 @@ protected:
     }
 
 public:
-    explicit UVSocketChannel() noexcept = default;
+    explicit UVSocketChannel() = default;
     NO_COPY(UVSocketChannel)
 };
 
 class UVServerSocketChannel: public UVSocketChannel
 {
 
-    static int dupFd(uv_tcp_t *tcp) noexcept {
+    static int dupFd(uv_tcp_t *tcp) {
         uv_os_fd_t fd = -1;
         auto ret = -1;
         if ((ret = uv_fileno(reinterpret_cast<uv_handle_t*>(tcp), &fd)) < 0) {
@@ -273,11 +273,11 @@ class UVServerSocketChannel: public UVSocketChannel
     }
 
 protected:
-    void doConnect() noexcept override {
+    void doConnect() override {
         setResult(false, mConnectPromise);
     }
 
-    void activePipeline(const PromisePtr<void> &promise) noexcept override {
+    void activePipeline(const PromisePtr<void> &promise) override {
         // 更新 tcp 两端地址
         int localSockLen = sizeof(mLocalAddress);
         uv_tcp_getsockname(&mTcp, &mLocalAddress.addr, &localSockLen);
@@ -288,7 +288,7 @@ protected:
         mPipeline.fireChannelActive();
     }
 
-    void doListen(int backlog) noexcept override {
+    void doListen(int backlog) override {
         auto ret = uv_listen((uv_stream_t *)&mTcp, backlog, [](uv_stream_t* server, int status) {
             auto self = static_cast<UVServerSocketChannel*>(server->data);
             self->doAccept();
@@ -303,7 +303,7 @@ protected:
     }
 
 public:
-    explicit UVServerSocketChannel() noexcept = default;
+    explicit UVServerSocketChannel() = default;
     NO_COPY(UVServerSocketChannel)
 };
 }

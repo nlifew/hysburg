@@ -7,7 +7,7 @@ using namespace hysburg;
 
 struct ClientHandler: public SimpleInboundChannelHandler<ByteBuf> {
 
-    void channelActive(hysburg::ChannelHandlerContext &ctx) noexcept override {
+    void channelActive(hysburg::ChannelHandlerContext &ctx) override {
         ctx.fireChannelActive();
         auto msg = makeAny<ByteBuf>();
         auto byteBuf = msg->as<ByteBuf>();
@@ -19,14 +19,14 @@ struct ClientHandler: public SimpleInboundChannelHandler<ByteBuf> {
         ctx.writeAndFlush(std::move(msg));
     }
 
-    void channelRead0(ChannelHandlerContext &ctx, ByteBuf &msg) noexcept override {
+    void channelRead0(ChannelHandlerContext &ctx, ByteBuf &msg) override {
         Log::print((char*) msg.readData(), msg.readableBytes());
         ctx.close();
     }
 };
 
 struct ServerHandler: SimpleInboundChannelHandler<ByteBuf> {
-    void channelRead0(ChannelHandlerContext &ctx, ByteBuf &msg) noexcept override {
+    void channelRead0(ChannelHandlerContext &ctx, ByteBuf &msg) override {
         auto resp = makeAny<ByteBuf>();
         auto byteBuf = resp->as<ByteBuf>();
         byteBuf->writeBytes("HTTP/1.1 200 OK\r\n");
@@ -47,7 +47,7 @@ static void testClient() {
     Bootstrap<UVSocketChannel>()
             .eventLoop(executor)
             .channel(&channel)
-            .handler<ChannelInitializer>([&factory](Channel &channel) {
+            .emplaceHandler<ChannelInitializer>([&factory](Channel &channel) {
                 channel.pipeline()
                         .emplaceLast<TLSContextHandler>(factory, TLSMode::S2N_CLIENT)
                         .emplaceLast<ClientHandler>();

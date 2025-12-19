@@ -22,20 +22,20 @@
 
 struct Log
 {
-    static uint64_t threadId() noexcept {
+    static uint64_t threadId() {
         // pthread_self() 非常慢，pthread_key 快很多，thread_local 最快
         thread_local pthread_t self = pthread_self();
         return reinterpret_cast<uint64_t>(self);
     }
 
-    static uint64_t currentTimeMillis() noexcept
+    static uint64_t currentTimeMillis()
     {
         auto now = std::chrono::system_clock::now();
         auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch());
         return now_ms.count();
     }
 
-    static const char *formatTime() noexcept 
+    static const char *formatTime()
     {
         thread_local char sTimeStr[64] {};
 
@@ -57,7 +57,7 @@ struct Log
         return sTimeStr;
     }
 
-    static void print(const char *msg, size_t msgLen) noexcept
+    static void print(const char *msg, size_t msgLen)
     {
         while (msgLen > 0 && msg[msgLen - 1] <= ' ') {
             msgLen -= 1;
@@ -65,7 +65,7 @@ struct Log
         println(msg, msgLen);
     }
 
-    static void println(const char *msg, size_t msgLen) noexcept
+    static void println(const char *msg, size_t msgLen)
     {
         if (msgLen <= 0) {
             return;

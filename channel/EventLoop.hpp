@@ -46,7 +46,7 @@ class EventLoop {
     std::weak_ptr<EventLoopGroup> mParent;
 
 
-    void flushOuterReq() noexcept {
+    void flushOuterReq() {
         std::map<uint64_t, PostReqPtr> cpy;
         {
             std::unique_lock lockGuard(mMutex);
@@ -57,7 +57,7 @@ class EventLoop {
         }
     }
 
-    void insertInnerReq(PostReqPtr pReq) noexcept {
+    void insertInnerReq(PostReqPtr pReq) {
         auto *req = pReq.get();
         mPostReq[req->id] = std::move(pReq);
         uv_timer_init(&mLooper, &req->timer);
@@ -76,7 +76,7 @@ class EventLoop {
         );
     }
 
-    void cancelOuterReq(uint64_t id) noexcept {
+    void cancelOuterReq(uint64_t id) {
         std::unique_lock lockGuard(mMutex);
         auto it = mOuterPostReq.find(id);
         if (it != mOuterPostReq.end()) {
@@ -84,7 +84,7 @@ class EventLoop {
         }
     }
 
-    void cancelInnerReq(uint64_t id) noexcept {
+    void cancelInnerReq(uint64_t id) {
         auto it = mPostReq.find(id);
         if (it != mPostReq.end()) {
             auto req = std::move(it->second);
@@ -94,7 +94,7 @@ class EventLoop {
     }
 
 public:
-    explicit EventLoop() noexcept = default;
+    explicit EventLoop() = default;
     NO_COPY(EventLoop)
 
     void loop() {
@@ -121,11 +121,11 @@ public:
         uv_loop_close(&mLooper);
     }
 
-    uint64_t post(std::function<void()> cb) noexcept {
+    uint64_t post(std::function<void()> cb) {
         return post(0, std::move(cb));
     }
 
-    uint64_t post(long ms, std::function<void()> cb) noexcept {
+    uint64_t post(long ms, std::function<void()> cb) {
         auto id = mTimerId.fetch_add(1, std::memory_order_relaxed);
         auto req = std::make_unique<PostReq>();
         req->delay = ms;
@@ -145,7 +145,7 @@ public:
         return id;
     }
 
-    void cancel(uint64_t id) noexcept {
+    void cancel(uint64_t id) {
         if (inEventLoop()) {
             cancelInnerReq(id);
         } else {
@@ -157,7 +157,7 @@ public:
      * 事实上这个函数根本停不下来，囧
      * 只能用于测试，用来当没有活跃链接时快速退出 EventLoop
      */
-    void quit() noexcept {
+    void quit() {
         post([this]() {
             std::unique_lock lockGuard(mMutex);
             if (mAsyncReady) {
@@ -167,12 +167,12 @@ public:
         });
     }
 
-    bool inEventLoop() const noexcept { return Log::threadId() == mLooperThreadId; }
+    bool inEventLoop() const { return Log::threadId() == mLooperThreadId; }
 
-    uv_loop_t *handle() noexcept { return &mLooper; }
+    uv_loop_t *handle() { return &mLooper; }
 
-    void setParent(const EventLoopGroupPtr& group) noexcept { mParent = group; }
-    EventLoopGroupPtr getParent() noexcept { return mParent.lock(); }
+    void setParent(const EventLoopGroupPtr& group) { mParent = group; }
+    EventLoopGroupPtr getParent() { return mParent.lock(); }
 };
 
 class Thread {
@@ -188,7 +188,7 @@ class Thread {
     EventLoopPtr mLooper;
     volatile State mState = State::INIT;
 
-    static void run(Thread *t) noexcept {
+    static void run(Thread *t) {
         auto looper = std::make_shared<EventLoop>();
         t->mLooper = looper;
         looper->post([self = t]() {
@@ -201,10 +201,10 @@ class Thread {
     }
 
 public:
-    explicit Thread() noexcept = default;
+    explicit Thread() = default;
     NO_COPY(Thread)
 
-    EventLoopPtr await() noexcept {
+    EventLoopPtr await() {
         std::unique_lock lockGuard(mMutex);
         while (true) {
             switch (mState) {
@@ -234,7 +234,7 @@ class EventLoopGroup: public std::enable_shared_from_this<EventLoopGroup> {
     std::unique_ptr<std::once_flag[]> mOnceFlags;
 
 public:
-    explicit EventLoopGroup(int size) noexcept {
+    explicit EventLoopGroup(int size) {
         mSize = std::max(1, size);
         // std::once_flag 没法移动，不能放到 vector 里
         mEventLoops = std::make_unique<EventLoopPtr[]>(mSize);
@@ -243,7 +243,7 @@ public:
 
     NO_COPY(EventLoopGroup)
 
-    EventLoopPtr next() noexcept {
+    EventLoopPtr next() {
         auto index = mIndex.fetch_add(1, std::memory_order_relaxed) % mSize;
         std::call_once(mOnceFlags[index], [index, this]() {
             mEventLoops[index] = Thread().await();

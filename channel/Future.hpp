@@ -18,7 +18,7 @@ template <typename T>
 using PromisePtr = std::shared_ptr<Promise<T>>;
 
 template <typename T>
-PromisePtr<T> makePromise(EventLoopPtr loop) noexcept {
+PromisePtr<T> makePromise(EventLoopPtr loop) {
     return std::make_shared<Promise<T>>(std::move(loop));
 }
 
@@ -50,7 +50,7 @@ class Future: public std::enable_shared_from_this<Future<T>> {
     using ValueType = std::conditional_t<std::is_void_v<T>, std::monostate, T>;
     ValueType mValue {};
 
-    void notifyListeners(std::vector<Listener> listeners) noexcept {
+    void notifyListeners(std::vector<Listener> listeners) {
         if (listeners.empty()) {
             return;
         }
@@ -71,7 +71,7 @@ class Future: public std::enable_shared_from_this<Future<T>> {
         });
     }
 
-    bool trySetResult(State result, ValueType value) noexcept {
+    bool trySetResult(State result, ValueType value) {
         // 快速返回，这是一个“写入前”的检查，不是“读取后”的消费
         if (mState.load(std::memory_order_relaxed) != State::INIT) {
             return false;
@@ -92,54 +92,54 @@ class Future: public std::enable_shared_from_this<Future<T>> {
         return true;
     }
 
-    void setResult(State result, ValueType value) noexcept {
+    void setResult(State result, ValueType value) {
         if (!trySetResult(result, std::move(value))) {
             PLOGE("another value !");
         }
     }
     friend class Promise<T>;
 public:
-    explicit Future(EventLoopPtr eventLoop) noexcept: mExecutor(std::move(eventLoop)) {
+    explicit Future(EventLoopPtr eventLoop): mExecutor(std::move(eventLoop)) {
     }
 
     NO_COPY(Future)
 
-    ~Future() noexcept = default; /* {
+    ~Future() = default; /* {
         std::unique_lock lockGuard(mMutex);
         CHECK(mListeners.empty(), "active listeners !")
     } */
 
     [[nodiscard]]
-    bool isSuccess() const noexcept { return mState.load(std::memory_order_acquire) == State::SUCCESS; }
+    bool isSuccess() const { return mState.load(std::memory_order_acquire) == State::SUCCESS; }
 
     [[nodiscard]]
-    bool isFailure() const noexcept { return mState.load(std::memory_order_acquire) == State::FAILURE; }
+    bool isFailure() const { return mState.load(std::memory_order_acquire) == State::FAILURE; }
 
     [[nodiscard]]
-    bool isCanceled() const noexcept { return mState.load(std::memory_order_acquire) == State::CANCELED; }
+    bool isCanceled() const { return mState.load(std::memory_order_acquire) == State::CANCELED; }
 
     [[nodiscard]]
-    bool isDone() const noexcept { return mState.load(std::memory_order_acquire) != State::INIT; }
+    bool isDone() const { return mState.load(std::memory_order_acquire) != State::INIT; }
 
-    void await() noexcept {
+    void await() {
         std::unique_lock lockGuard(mMutex);
         while (!isDone()) {
             mCond.wait(lockGuard);
         }
     }
 
-    void sync() noexcept {
+    void sync() {
         await();
         CHECK(isSuccess(), "not success !")
     }
 
     template<typename E = T>
-    std::enable_if_t<!std::is_void_v<E>, E> &get() noexcept {
+    std::enable_if_t<!std::is_void_v<E>, E> &get() {
         CHECK(isSuccess(), "no value available")
         return mValue;
     }
 
-    int addListener(std::function<void(Future<T>&)> cb) noexcept {
+    int addListener(std::function<void(Future<T>&)> cb) {
         std::unique_lock lockGuard(mMutex);
         auto id = mListeners.emplace_back(mListenerId++, std::move(cb)).id;
         if (isDone()) {
@@ -150,7 +150,7 @@ public:
         return id;
     }
 
-    void removeListener(int id) noexcept {
+    void removeListener(int id) {
         std::unique_lock lockGuard(mMutex);
         for (auto it = mListeners.begin(); it != mListeners.end(); ++it) {
             if (it->id == id) {
@@ -166,27 +166,27 @@ template <typename T>
 class Promise {
     FuturePtr<T> mFuture;
 public:
-    explicit Promise(EventLoopPtr eventLoop) noexcept {
+    explicit Promise(EventLoopPtr eventLoop) {
         mFuture = std::make_shared<Future<T>>(std::move(eventLoop));
     }
     NO_COPY(Promise)
 
-    ~Promise() noexcept {
+    ~Promise() {
         mFuture->trySetResult(Future<T>::CANCELED, typename Future<T>::ValueType());
     }
 
     template<typename ...Args>
-    void setSuccess(Args&&... args) noexcept {
+    void setSuccess(Args&&... args) {
         typename Future<T>::ValueType value(std::forward<Args>(args)...);
         mFuture->setResult(Future<T>::SUCCESS, std::move(value));
     }
 
-    void setFailure() noexcept {
+    void setFailure() {
         mFuture->setResult(Future<T>::FAILURE, typename Future<T>::ValueType());
     }
 
-    Future<T> &retain() noexcept { return *mFuture; }
-    FuturePtr<T> future() noexcept { return mFuture; }
+    Future<T> &retain() { return *mFuture; }
+    FuturePtr<T> future() { return mFuture; }
 };
 
 

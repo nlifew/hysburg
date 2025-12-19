@@ -38,7 +38,7 @@ private:
     std::string mHost;
 
 public:
-    explicit TLSContext(SSL *ssl, TLSMode mode) noexcept {
+    explicit TLSContext(SSL *ssl, TLSMode mode) {
         mSSL = ssl;
         mMode = mode;
         mReaderBio = BIO_new(BIO_s_mem());
@@ -57,7 +57,7 @@ public:
 
     NO_COPY(TLSContext)
 
-    ~TLSContext() noexcept {
+    ~TLSContext() {
         SSL_free(mSSL);
     }
 
@@ -68,7 +68,7 @@ public:
     };
 
     [[nodiscard]]
-    HandshakeResult handshake() noexcept {
+    HandshakeResult handshake() {
         auto ret = SSL_do_handshake(mSSL);
         if (ret == 1) {
             LOGI("SSL handshake ok");
@@ -93,14 +93,14 @@ public:
         return HandshakeResult::ERROR;
     }
 
-    void send(ByteBuf &byteBuf) noexcept {
+    void send(ByteBuf &byteBuf) {
         auto ret = SSL_write(mSSL, byteBuf.readData(), byteBuf.readableBytes());
         if (ret > 0) {
             byteBuf.readIndex(byteBuf.readIndex() + ret);
         }
     }
 
-    void recv(ByteBuf &byteBuf) noexcept {
+    void recv(ByteBuf &byteBuf) {
         char buff[4096];
         while (true) {
             auto bytes = SSL_read(mSSL, buff, sizeof(buff));
@@ -111,7 +111,7 @@ public:
         }
     }
 
-    long pendingReadableBytes() noexcept {
+    long pendingReadableBytes() {
         return BIO_pending(mWriterBio);
     }
 
@@ -137,7 +137,7 @@ public:
         }
     }
 
-    void shutdown() noexcept {
+    void shutdown() {
         SSL_shutdown(mSSL);
     }
 
@@ -147,10 +147,10 @@ public:
         SSL_set_tlsext_host_name(mSSL, mHost.c_str());
     }
 
-    TLSMode mode() const noexcept { return mMode; }
+    TLSMode mode() const { return mMode; }
 
     [[nodiscard]]
-    bool isClientMode() const noexcept { return mMode == TLSMode::S2N_CLIENT; }
+    bool isClientMode() const { return mMode == TLSMode::S2N_CLIENT; }
 };
 
 class TLSContextFactory: public std::enable_shared_from_this<TLSContextFactory> {
@@ -167,13 +167,13 @@ class TLSContextFactory: public std::enable_shared_from_this<TLSContextFactory> 
 
 public:
     struct GlobalInit {
-        explicit GlobalInit() noexcept {
+        explicit GlobalInit() {
             SSL_library_init();
             SSL_load_error_strings();
         }
     };
 
-    explicit TLSContextFactory() noexcept {
+    explicit TLSContextFactory() {
         static GlobalInit initLibrary;
         mSSLCtx = SSL_CTX_new(TLS_method());
         auto ret = SSL_CTX_set_min_proto_version(mSSLCtx, TLS1_2_VERSION);
@@ -191,12 +191,12 @@ public:
 
     NO_COPY(TLSContextFactory)
 
-    ~TLSContextFactory() noexcept {
+    ~TLSContextFactory() {
         SSL_CTX_free(mSSLCtx);
         mSSLCtx = nullptr;
     }
 
-    int certFile(const std::string_view &certFile, const std::string_view &keyFile) noexcept {
+    int certFile(const std::string_view &certFile, const std::string_view &keyFile) {
         std::string cert(certFile);
         std::string key(keyFile);
         auto ret = SSL_CTX_use_certificate_chain_file(mSSLCtx, cert.c_str());
@@ -209,7 +209,7 @@ public:
         return sslError(ret);
     }
 
-    TLSContextPtr newInstance(TLSMode mode) noexcept {
+    TLSContextPtr newInstance(TLSMode mode) {
         return std::make_shared<TLSContext>(SSL_new(mSSLCtx), mode);
     }
 };
@@ -229,7 +229,7 @@ class TLSContextHandler: public ChannelDuplexHandler {
 
     State mState = State::INIT;
 
-    void decode(ChannelHandlerContext &ctx) noexcept {
+    void decode(ChannelHandlerContext &ctx) {
         if (mState == State::INIT) {
             onInit(ctx);
         }
@@ -245,7 +245,7 @@ class TLSContextHandler: public ChannelDuplexHandler {
         flush(ctx);
     }
 
-    void onInit(ChannelHandlerContext &ctx) noexcept {
+    void onInit(ChannelHandlerContext &ctx) {
         // client 必须设置 sni
         if (mTLSContext->isClientMode()) {
             auto &host = ctx.channel().connectHost();
@@ -259,7 +259,7 @@ class TLSContextHandler: public ChannelDuplexHandler {
         mState = State::HANDSHAKE;
     }
 
-    void onHandshake(ChannelHandlerContext &) noexcept {
+    void onHandshake(ChannelHandlerContext &) {
         switch (mTLSContext->handshake()) {
             case TLSContext::AGAIN: {
                 break;
@@ -278,7 +278,7 @@ class TLSContextHandler: public ChannelDuplexHandler {
         }
     }
 
-    void onOk(ChannelHandlerContext &ctx) noexcept {
+    void onOk(ChannelHandlerContext &ctx) {
         while (true) {
             auto msg = makeAny<ByteBuf>(16 * 1024);
             auto byteBuf = msg->as<ByteBuf>();
@@ -290,13 +290,13 @@ class TLSContextHandler: public ChannelDuplexHandler {
         }
     }
 
-    void onError(ChannelHandlerContext &ctx) noexcept {
+    void onError(ChannelHandlerContext &ctx) {
         mTLSContext->shutdown();
         mTmpWriteBuff.release();
         ctx.close();
     }
 
-    void encode(ChannelHandlerContext &, ByteBuf &byteBuf, const PromisePtr<void>& promise) noexcept {
+    void encode(ChannelHandlerContext &, ByteBuf &byteBuf, const PromisePtr<void>& promise) {
         bool ok = true;
         if (mState == State::HANDSHAKE) {
             mTmpWriteBuff.cumulate(byteBuf);
@@ -317,20 +317,20 @@ class TLSContextHandler: public ChannelDuplexHandler {
     }
 
 public:
-    void handlerAdded(ChannelHandlerContext &ctx) noexcept override {
+    void handlerAdded(ChannelHandlerContext &ctx) override {
         if (mTLSContext->isClientMode() && ctx.channel().isActive()) {
             decode(ctx);
         }
     }
 
-    void channelActive(hysburg::ChannelHandlerContext &ctx) noexcept override {
+    void channelActive(hysburg::ChannelHandlerContext &ctx) override {
         if (mTLSContext->isClientMode()) {
             decode(ctx);
         }
         ctx.fireChannelActive();
     }
 
-    void channelRead(ChannelHandlerContext &ctx, AnyPtr msg) noexcept override {
+    void channelRead(ChannelHandlerContext &ctx, AnyPtr msg) override {
         if (!msg->is<ByteBuf>()) {
             ctx.fireChannelRead(std::move(msg));
             return;
@@ -339,7 +339,7 @@ public:
         decode(ctx);
     }
 
-    void write(ChannelHandlerContext &ctx, AnyPtr msg, PromisePtr<void> promise) noexcept override {
+    void write(ChannelHandlerContext &ctx, AnyPtr msg, PromisePtr<void> promise) override {
         if (!msg->is<ByteBuf>()) {
             ctx.write(std::move(msg), std::move(promise));
             return;
@@ -347,7 +347,7 @@ public:
         encode(ctx, *msg->as<ByteBuf>(), promise);
     }
 
-    void flush(ChannelHandlerContext &ctx) noexcept override {
+    void flush(ChannelHandlerContext &ctx) override {
         if (mTLSContext->pendingReadableBytes() <= 0) {
             return;
         }
@@ -359,25 +359,25 @@ public:
         }
     }
 
-    void close(ChannelHandlerContext &ctx) noexcept override {
+    void close(ChannelHandlerContext &ctx) override {
         if (mState != State::ERROR) {
             mTLSContext->shutdown();
         }
         ctx.close();
     }
 
-    explicit TLSContextHandler(TLSContextPtr tlsCtx) noexcept {
+    explicit TLSContextHandler(TLSContextPtr tlsCtx) {
         mTLSContext.swap(tlsCtx);
     }
 
-    explicit TLSContextHandler(TLSContextFactoryPtr &factory, TLSMode mode) noexcept:
+    explicit TLSContextHandler(TLSContextFactoryPtr &factory, TLSMode mode):
             TLSContextHandler(factory->newInstance(mode)) {
     }
 
     NO_COPY(TLSContextHandler)
 
     [[nodiscard]]
-    TLSContextPtr tlsContext() noexcept { return mTLSContext; }
+    TLSContextPtr tlsContext() { return mTLSContext; }
 };
 
 }

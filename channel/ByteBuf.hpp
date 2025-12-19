@@ -13,18 +13,18 @@ class ByteBuf
 public:
     struct Allocator {
         [[nodiscard]]
-        uint8_t *alloc(size_t size) const noexcept {
+        uint8_t *alloc(size_t size) const {
             (void) this;
             return static_cast<uint8_t*>(::malloc(size));
         }
 
         [[nodiscard]]
-        uint8_t *realloc(uint8_t *old, size_t size) const noexcept {
+        uint8_t *realloc(uint8_t *old, size_t size) const {
             (void) this;
             return static_cast<uint8_t*>(::realloc(old, size));
         }
 
-        void free(uint8_t *ptr) const noexcept {
+        void free(uint8_t *ptr) const {
             (void) this;
             ::free(ptr);
         }
@@ -37,7 +37,7 @@ private:
     size_t mWriteIndex = 0;
 
     template<typename T>
-    T readInteger() noexcept
+    T readInteger()
     {
         if (sizeof(T) > readableBytes()) {
             return 0;
@@ -47,7 +47,7 @@ private:
         return Numbers::reverseByte<T>(value);
     }
 
-    void ensureWriteSpace(size_t len) noexcept
+    void ensureWriteSpace(size_t len)
     {
         size_t targetWriteIndex = mWriteIndex + len;
         if (UNLIKELY(targetWriteIndex > mCapacity)) {
@@ -62,7 +62,7 @@ private:
     }
 
     template<typename T>
-    void writeInteger(T value) noexcept
+    void writeInteger(T value)
     {
         ensureWriteSpace(sizeof(T));
         *reinterpret_cast<T *>(mData + mWriteIndex) = Numbers::reverseByte<T>(value);
@@ -70,59 +70,59 @@ private:
     }
 
 public:
-    explicit ByteBuf() noexcept = default;
+    explicit ByteBuf() = default;
 
-    explicit ByteBuf(size_t capacity) noexcept {
+    explicit ByteBuf(size_t capacity) {
         mCapacity = capacity;
         mData = Allocator().alloc(capacity);
     }
 
     NO_COPY(ByteBuf);
 
-    ~ByteBuf() noexcept { Allocator().free(mData); }
+    ~ByteBuf() { Allocator().free(mData); }
 
-    uint8_t readByte() noexcept { return readInteger<int8_t>(); }
-    uint16_t readShort() noexcept { return readInteger<int16_t>(); }
-    uint32_t readInt() noexcept { return readInteger<int32_t>(); }
-    uint64_t readLong() noexcept { return readInteger<int64_t>(); }
+    uint8_t readByte() { return readInteger<int8_t>(); }
+    uint16_t readShort() { return readInteger<int16_t>(); }
+    uint32_t readInt() { return readInteger<int32_t>(); }
+    uint64_t readLong() { return readInteger<int64_t>(); }
 
-    size_t readBytes(void *out, size_t len) noexcept {
+    size_t readBytes(void *out, size_t len) {
         auto consumed = std::min(len, readableBytes());
         memcpy(out, &mData[mReadIndex], consumed);
         mReadIndex += consumed;
         return consumed;
     }
 
-    void writeByte(int8_t value) noexcept { writeInteger<int8_t>(value); }
-    void writeShort(int16_t value) noexcept { writeInteger<int16_t>(value); }
-    void writeInt(int32_t value) noexcept { writeInteger<int32_t>(value); }
-    void writeLong(int64_t value) noexcept { writeInteger<int64_t>(value); }
+    void writeByte(int8_t value) { writeInteger<int8_t>(value); }
+    void writeShort(int16_t value) { writeInteger<int16_t>(value); }
+    void writeInt(int32_t value) { writeInteger<int32_t>(value); }
+    void writeLong(int64_t value) { writeInteger<int64_t>(value); }
 
-    void writeBytes(const void *data, size_t len) noexcept {
+    void writeBytes(const void *data, size_t len) {
         ensureWriteSpace(len);
         memcpy(&mData[mWriteIndex], data, len);
         mWriteIndex += len;
     }
 
-    void writeBytes(const std::string_view &str) noexcept {
+    void writeBytes(const std::string_view &str) {
         writeBytes(str.data(), str.size());
     }
 
 
-    void discardReadBytes() noexcept {
+    void discardReadBytes() {
         memmove(mData, mData + mReadIndex, readableBytes());
         mWriteIndex -= mReadIndex;
         mReadIndex = 0;
     }
 
-    void swap(ByteBuf &o) noexcept {
+    void swap(ByteBuf &o) {
         std::swap(mData, o.mData);
         std::swap(mCapacity, o.mCapacity);
         std::swap(mReadIndex, o.mReadIndex);
         std::swap(mWriteIndex, o.mWriteIndex);
     }
 
-    void cumulate(ByteBuf &o) noexcept {
+    void cumulate(ByteBuf &o) {
         if (readableBytes() == 0) {
             swap(o);
         } else {
@@ -131,38 +131,38 @@ public:
         }
     }
 
-    void release() noexcept {
+    void release() {
         grab(nullptr, 0);
     }
 
-    void *data() const noexcept { return mData; }
-    size_t capacity() const noexcept { return mCapacity; }
+    void *data() const { return mData; }
+    size_t capacity() const { return mCapacity; }
 
-    void *readData() const noexcept { return mData + mReadIndex; }
-    void *writeData() const noexcept { return mData + mWriteIndex; }
+    void *readData() const { return mData + mReadIndex; }
+    void *writeData() const { return mData + mWriteIndex; }
 
-    size_t readIndex() const noexcept { return mReadIndex; }
-    size_t writeIndex() const noexcept { return mWriteIndex; }
+    size_t readIndex() const { return mReadIndex; }
+    size_t writeIndex() const { return mWriteIndex; }
 
-    size_t readableBytes() const noexcept { return mWriteIndex - mReadIndex; }
-    size_t writableBytes() const noexcept { return mCapacity - mWriteIndex; }
+    size_t readableBytes() const { return mWriteIndex - mReadIndex; }
+    size_t writableBytes() const { return mCapacity - mWriteIndex; }
 
-//    bool empty() const noexcept { return mSize == 0; }
+//    bool empty() const { return mSize == 0; }
 
-    void grab(uint8_t *data, size_t capacity) noexcept {
+    void grab(uint8_t *data, size_t capacity) {
         Allocator().free(mData);
         mData = data;
         mCapacity = capacity;
         mReadIndex = mWriteIndex = 0;
     }
 
-    void readIndex(size_t index) noexcept { mReadIndex = index; }
-    void writeIndex(size_t index) noexcept { mWriteIndex = index; }
+    void readIndex(size_t index) { mReadIndex = index; }
+    void writeIndex(size_t index) { mWriteIndex = index; }
 
-    void clear() noexcept { mReadIndex = mWriteIndex = 0; }
+    void clear() { mReadIndex = mWriteIndex = 0; }
 
-    void offsetReader(ssize_t offset) noexcept { mReadIndex += offset; }
-    void offsetWriter(ssize_t offset) noexcept { mWriteIndex += offset; }
+    void offsetReader(ssize_t offset) { mReadIndex += offset; }
+    void offsetWriter(ssize_t offset) { mWriteIndex += offset; }
 };
 }
 

@@ -27,7 +27,7 @@ namespace hysburg
 
 struct Times
 {
-    static uint64_t currentTimeMillis() noexcept
+    static uint64_t currentTimeMillis()
     {
         auto now = std::chrono::system_clock::now();
         auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch());
@@ -44,13 +44,13 @@ struct Numbers
     }
 
     template<typename T>
-    static std::enable_if_t<sizeof(T) == 1, T> reverseByte(T value) noexcept
+    static std::enable_if_t<sizeof(T) == 1, T> reverseByte(T value)
     {
         return value;
     }
 
     template<typename T>
-    static std::enable_if_t<sizeof(T) == 2, T> reverseByte(T value) noexcept
+    static std::enable_if_t<sizeof(T) == 2, T> reverseByte(T value)
     {
         auto *ptr = reinterpret_cast<uint8_t *>(&value);
         std::swap(ptr[0], ptr[1]);
@@ -58,7 +58,7 @@ struct Numbers
     }
 
     template <typename T>
-    static std::enable_if_t<sizeof(T) == 3, T> reverseByte(T value) noexcept
+    static std::enable_if_t<sizeof(T) == 3, T> reverseByte(T value)
     {
         auto *ptr = reinterpret_cast<uint8_t *>(&value);
         std::swap(ptr[0], ptr[2]);
@@ -66,7 +66,7 @@ struct Numbers
     }
 
     template<typename T>
-    static std::enable_if_t<sizeof(T) == 4, T> reverseByte(T value) noexcept
+    static std::enable_if_t<sizeof(T) == 4, T> reverseByte(T value)
     {
         auto *ptr = reinterpret_cast<uint8_t *>(&value);
         std::swap(ptr[0], ptr[3]);
@@ -75,7 +75,7 @@ struct Numbers
     }
 
     template<typename T>
-    static std::enable_if_t<sizeof(T) == 8, T> reverseByte(T value) noexcept
+    static std::enable_if_t<sizeof(T) == 8, T> reverseByte(T value)
     {
         auto *ptr = reinterpret_cast<uint8_t *>(&value);
         std::swap(ptr[0], ptr[7]);
@@ -122,19 +122,19 @@ struct Numbers
 
 struct Net
 {
-    static bool isIpv4(const char *str) noexcept
+    static bool isIpv4(const char *str)
     {
         sockaddr_in addr {};
         return inet_pton(AF_INET, str, &addr) == 0;
     }
 
-    static bool isIpv6(const char *str) noexcept
+    static bool isIpv6(const char *str)
     {
         sockaddr_in6 addr {};
         return inet_pton(AF_INET6, str, &addr) == 0;
     }
 
-    static bool equals(const sockaddr_storage *p, const sockaddr *q) noexcept
+    static bool equals(const sockaddr_storage *p, const sockaddr *q)
     {
         if (p == nullptr || q == nullptr) {
             return false;
@@ -157,7 +157,7 @@ struct Net
         return false;
     }
 
-    static int copy(sockaddr_storage *out, const sockaddr *in) noexcept
+    static int copy(sockaddr_storage *out, const sockaddr *in)
     {
         if (in == nullptr) {
             return -1;
@@ -166,7 +166,7 @@ struct Net
         return 0;
     }
 
-    static socklen_t getSockLen(int family) noexcept
+    static socklen_t getSockLen(int family)
     {
         switch (family) {
             case AF_INET: return sizeof(sockaddr_in);
@@ -223,7 +223,7 @@ struct Net
 
 struct Strings
 {
-    static char *unsafeToUpper(char *str, size_t len) noexcept
+    static char *unsafeToUpper(char *str, size_t len)
     {
         char *ret = str;
         // bin('A')     = 0100 0001
@@ -244,7 +244,7 @@ struct Strings
         return ret;
     }
 
-    static char *unsafeToLower(char *str, size_t len) noexcept
+    static char *unsafeToLower(char *str, size_t len)
     {
         char *ret = str;
         // bin('A')     = 0100 0001
@@ -265,7 +265,7 @@ struct Strings
         return ret;
     }
 
-    static char *toUpper(char *str, size_t len) noexcept
+    static char *toUpper(char *str, size_t len)
     {
         for (size_t i = 0; i < len; ++i) {
             str[i] = (char) std::toupper(str[i]);
@@ -274,7 +274,7 @@ struct Strings
     }
 
 
-//    static std::string randomString(size_t len) noexcept
+//    static std::string randomString(size_t len)
 //    {
 //        std::vector<unsigned char> vec(len / 4 * 3 + 4);
 //        Numbers::writeRandom(vec.data(), vec.size());
@@ -283,7 +283,7 @@ struct Strings
 //        return ret;
 //    }
 
-    static int toInt(const std::string &s) noexcept
+    static int toInt(const std::string &s)
     {
         if (s.empty()) {
             return 0;
