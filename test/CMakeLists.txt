@@ -17,3 +17,12 @@ target_link_libraries(
         tls_test
         runtime
 )
+
+add_executable(
+        socks5_test
+        socks5_test.cpp
+)
+target_link_libraries(
+        socks5_test
+        runtime
+)

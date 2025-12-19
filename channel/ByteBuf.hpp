@@ -39,10 +39,9 @@ private:
     template<typename T>
     T readInteger() noexcept
     {
-        CHECK(sizeof(T) <= readableBytes(),
-              "space access its capacity, %zu %zu",
-              sizeof(T), readableBytes())
-
+        if (sizeof(T) > readableBytes()) {
+            return 0;
+        }
         T value = *reinterpret_cast<T*>(mData + mReadIndex);
         mReadIndex += sizeof(T);
         return Numbers::reverseByte<T>(value);
