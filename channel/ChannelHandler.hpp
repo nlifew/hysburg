@@ -357,7 +357,7 @@ class SimpleInboundChannelHandler: public ChannelInboundHandler
     bool isType(Any &msg) const { return msg.is<T>(); }
 
     template<>
-    bool isType<Any>(Any &msg) const { return true; }
+    bool isType<Any>(Any &) const { return true; }
 
 protected:
     virtual bool acceptInboundMessage(Any &msg) {

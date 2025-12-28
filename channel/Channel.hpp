@@ -156,8 +156,8 @@ public:
     static constexpr uint32_t FLAG_INBOUNDS = 1 << 0;
     static constexpr uint32_t FLAG_OUTBOUNDS = 1 << 1;
 
-    virtual void handlerAdded(ChannelHandlerContext &ctx) {  }
-    virtual void handlerRemoved(ChannelHandlerContext &ctx) {  }
+    virtual void handlerAdded(ChannelHandlerContext &ctx) { (void) ctx; }
+    virtual void handlerRemoved(ChannelHandlerContext &ctx) { (void) ctx; }
 
     virtual void channelActive(ChannelHandlerContext &ctx);
     virtual void channelRead(ChannelHandlerContext &ctx, AnyPtr msg);

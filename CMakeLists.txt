@@ -13,7 +13,22 @@ link_directories(/usr/local/lib)
 add_subdirectory(test)
 
 add_subdirectory(third_party)
-add_compile_options("-Wall" "-Wextra" "-Werror" "-fno-exceptions" "-Wno-unused-parameter")
+add_compile_options(
+        "-Wall"
+        "-Wextra"
+        "-Werror"
+        "-pthread"
+        "-fno-exceptions"
+        "-Wno-deprecated-declarations"
+#        "-fsanitize=address"
+#        "-fno-omit-frame-pointer"
+#        "-fsanitize=thread"
+)
+add_link_options(
+        "-pthread"
+#        "-fsanitize=address"
+#        "-fsanitize=thread"
+)
 
 add_library(
         runtime

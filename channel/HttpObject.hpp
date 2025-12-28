@@ -560,7 +560,7 @@ protected:
         }
     }
 
-    void encode(ChannelHandlerContext &ctx, HttpObjectType &msg, ByteBuf &out) override
+    void encode(ChannelHandlerContext &, HttpObjectType &msg, ByteBuf &out) override
     {
         // 修复一些不正确的状态
         fixHttpObject(msg);
