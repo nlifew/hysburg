@@ -147,7 +147,7 @@ protected:
         for (size_t i = 0; i < event->msgQueue.size(); i ++) {
             auto byteBuf = event->msgQueue[i].first->as<ByteBuf>();
             event->bufQueue[i] = uv_buf_init(
-                    reinterpret_cast<char*>(byteBuf->readData()),
+                    static_cast<char*>(byteBuf->readData()),
                     byteBuf->readableBytes()
             );
         }
@@ -179,15 +179,11 @@ protected:
         activePipeline(nullptr);
     }
 
-    void doListen(int backlog) override {
+    void doListen(int) override {
         setResult(false, mListenPromise);
     }
 
     void doClose() override {
-        if (!mRegisterPromise->retain().isSuccess()) {
-            setResult(true, mConnectPromise);
-            return;
-        }
         // 关闭整条流水线
         if (mPipeline.isActive()) {
             mPipeline.fireChannelInactive();
@@ -218,24 +214,48 @@ class UVServerSocketChannel: public UVSocketChannel
             return -1;
         }
         if ((ret = dup(fd)) < 0) {
-            LOGE("failed to dup socket fd '%d', close client", fd);
+            LOGE("failed to dup socket fd '%d'", fd);
             return -1;
         }
         return ret;
     }
 
-    void doAccept() {
-        uv_tcp_t client {};
-        uv_tcp_init(mTcp.loop, &client);
-        std::unique_ptr<uv_tcp_t, void(*)(uv_tcp_t*)> clientGuard(
-                &client, [](uv_tcp_t *client) {
-                    uv_close(reinterpret_cast<uv_handle_t*>(client), nullptr);
-                });
+    static void deleteTmpTcp(uv_tcp_t *tcp) {
+        if (tcp->loop == nullptr) {
+            delete tcp;
+            return;
+        }
+        uv_close(reinterpret_cast<uv_handle_t*>(tcp), [](uv_handle_t *ptr) {
+            delete ptr;
+        });
+    }
 
-        auto ret = uv_accept((uv_stream_t*) &mTcp, (uv_stream_t*) &client);
+    int acceptNewFd() {
+        // 这里必须在堆上分配，因为 uv_close() 要求在 callback 执行之前，handle 必须有效，
+        // 即使 callback 为 nullptr 也不例外
+        std::unique_ptr<uv_tcp_t, decltype(&deleteTmpTcp)> client(
+                new uv_tcp_t, deleteTmpTcp
+        );
+        uv_tcp_init(mTcp.loop, client.get());
+
+        auto ret = uv_accept(
+                reinterpret_cast<uv_stream_t*>(&mTcp),
+                reinterpret_cast<uv_stream_t*>(client.get())
+        );
         if (ret != 0) {
             LOGW("failed to accept new client, close server");
-            clientGuard.reset(); // 先关闭 client 再关闭 server
+            return -1;
+        }
+        // 需要把 client 跨线程传递给 executor.
+        // client tcp 是绑定在 mExecutor 线程中的，不能跨线程传递给 client channel
+        // 这里是用 dup 文件描述符的方式传递
+        return dupFd(client.get());
+    }
+
+    void doAccept(int status) {
+        int newFd = -1;
+        if (status != 0 || (newFd = acceptNewFd()) <= 0) {
+            LOGE("listen failed, status='%d', dupfd='%d'", status, newFd);
             doClose();
             return;
         }
@@ -244,16 +264,6 @@ class UVServerSocketChannel: public UVSocketChannel
         auto executor = group ? group->next() : nullptr;
         if (executor == nullptr) {
             executor = mExecutor;
-        }
-
-        // 需要把 client 跨线程传递给 executor.
-        // client tcp 是绑定在 mExecutor 线程中的，不能跨线程传递给 client channel
-        // 这里是用 dup 文件描述符的方式传递
-        int newFd = dupFd(&client);
-        clientGuard.reset();
-
-        if (newFd < 0) {
-            return;
         }
 
         auto channel = std::make_shared<UVSocketChannel>();
@@ -277,7 +287,7 @@ protected:
         setResult(false, mConnectPromise);
     }
 
-    void activePipeline(const PromisePtr<void> &promise) override {
+    void activePipeline(const PromisePtr<void> &) override {
         // 更新 tcp 两端地址
         int localSockLen = sizeof(mLocalAddress);
         uv_tcp_getsockname(&mTcp, &mLocalAddress.addr, &localSockLen);
@@ -290,8 +300,7 @@ protected:
 
     void doListen(int backlog) override {
         auto ret = uv_listen((uv_stream_t *)&mTcp, backlog, [](uv_stream_t* server, int status) {
-            auto self = static_cast<UVServerSocketChannel*>(server->data);
-            self->doAccept();
+            static_cast<UVServerSocketChannel*>(server->data)->doAccept(status);
         });
         if (ret != 0) {
             setResult(false, mListenPromise);

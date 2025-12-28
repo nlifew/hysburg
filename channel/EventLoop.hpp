@@ -23,73 +23,44 @@ using EventLoopPtr = std::shared_ptr<EventLoop>;
 using EventLoopGroupPtr = std::shared_ptr<EventLoopGroup>;
 
 class EventLoop {
+
     struct PostReq {
-        uint64_t id = 0;
-        long delay = 0;
-        std::function<void()> rcb;
+        uint64_t delay = 0;
         uv_timer_t timer {};
-        EventLoop *eventLoop = nullptr;
+        std::function<void()> rcb;
     };
-    using PostReqPtr = std::unique_ptr<PostReq>;
 
     uint64_t mLooperThreadId = 0;
     uv_loop_t mLooper {};
 
-    std::atomic<uint64_t> mTimerId { 1 };
-    std::map<uint64_t, PostReqPtr> mPostReq;
-
     std::mutex mMutex;
     uv_async_t mAsync {};
-    volatile bool mAsyncReady = false;
-    std::map<uint64_t, PostReqPtr> mOuterPostReq;
 
+    std::vector<std::unique_ptr<PostReq>> mQueue;
     std::weak_ptr<EventLoopGroup> mParent;
 
 
     void flushOuterReq() {
-        std::map<uint64_t, PostReqPtr> cpy;
-        {
+        std::vector<std::unique_ptr<PostReq>> cpy; {
             std::unique_lock lockGuard(mMutex);
-            cpy.swap(mOuterPostReq);
+            cpy.swap(mQueue);
         }
-        for (auto &it : cpy) {
-            insertInnerReq(std::move(it.second));
-        }
-    }
-
-    void insertInnerReq(PostReqPtr pReq) {
-        auto *req = pReq.get();
-        mPostReq[req->id] = std::move(pReq);
-        uv_timer_init(&mLooper, &req->timer);
-        req->timer.data = req;
-        uv_timer_start(
-                &req->timer,
-                [](uv_timer_t *tm) {
-                    auto tmp = static_cast<PostReq*>(tm->data);
-                    auto req = std::move(tmp->eventLoop->mPostReq[tmp->id]);
-                    // 先从 map 中移除自己，防止回调 cb 的时候辗转调用到 cancel
-                    req->eventLoop->mPostReq.erase(req->id);
-                    if (req->rcb) { req->rcb(); }
-                },
-                req->delay,
-                0
-        );
-    }
-
-    void cancelOuterReq(uint64_t id) {
-        std::unique_lock lockGuard(mMutex);
-        auto it = mOuterPostReq.find(id);
-        if (it != mOuterPostReq.end()) {
-            mOuterPostReq.erase(it);
-        }
-    }
-
-    void cancelInnerReq(uint64_t id) {
-        auto it = mPostReq.find(id);
-        if (it != mPostReq.end()) {
-            auto req = std::move(it->second);
-            uv_timer_stop(&req->timer);
-            mPostReq.erase(it);
+        for (auto &_it : cpy) {
+            auto it = _it.release();
+            uv_timer_init(&mLooper, &it->timer);
+            it->timer.data = it;
+            uv_timer_start(
+                    &it->timer,
+                    [](uv_timer_t *tm) {
+                        auto req = static_cast<PostReq*>(tm->data);
+                        if (req->rcb != nullptr) { req->rcb(); }
+                        uv_close(reinterpret_cast<uv_handle_t*>(tm), [](uv_handle_t *ptr) {
+                            delete static_cast<PostReq*>(ptr->data);
+                        });
+                    },
+                    it->delay,
+                    0
+            );
         }
     }
 
@@ -107,7 +78,6 @@ public:
             self->flushOuterReq();
         });
         mAsync.data = this;
-        mAsyncReady = true;
         mLooperThreadId = Log::threadId();
         lockGuard.unlock();
 
@@ -118,53 +88,25 @@ public:
         uv_run(&mLooper, UV_RUN_DEFAULT);
 
         // 已经退出，销毁掉资源
+        lockGuard.lock();
         uv_loop_close(&mLooper);
+        mLooperThreadId = 0;
     }
 
-    uint64_t post(std::function<void()> cb) {
-        return post(0, std::move(cb));
+    void post(std::function<void()> cb) {
+        post(0, std::move(cb));
     }
 
-    uint64_t post(long ms, std::function<void()> cb) {
-        auto id = mTimerId.fetch_add(1, std::memory_order_relaxed);
+    void post(long ms, std::function<void()> cb) {
         auto req = std::make_unique<PostReq>();
+        req->rcb.swap(cb);
         req->delay = ms;
-        req->rcb = std::move(cb);
-        req->eventLoop = this;
-        req->id = id;
 
-        if (inEventLoop()) {
-            insertInnerReq(std::move(req));
-        } else {
-            std::unique_lock lockGuard(mMutex);
-            mOuterPostReq[req->id] = std::move(req);
-            if (mAsyncReady) {
-                uv_async_send(&mAsync);
-            }
+        std::unique_lock lockGuard(mMutex);
+        mQueue.emplace_back(std::move(req));
+        if (mLooperThreadId != 0) {
+            uv_async_send(&mAsync);
         }
-        return id;
-    }
-
-    void cancel(uint64_t id) {
-        if (inEventLoop()) {
-            cancelInnerReq(id);
-        } else {
-            cancelOuterReq(id);
-        }
-    }
-
-    /**
-     * 事实上这个函数根本停不下来，囧
-     * 只能用于测试，用来当没有活跃链接时快速退出 EventLoop
-     */
-    void quit() {
-        post([this]() {
-            std::unique_lock lockGuard(mMutex);
-            if (mAsyncReady) {
-                mAsyncReady = false;
-                uv_close(reinterpret_cast<uv_handle_t*>(&mAsync), nullptr);
-            }
-        });
     }
 
     bool inEventLoop() const { return Log::threadId() == mLooperThreadId; }
@@ -255,4 +197,4 @@ public:
 }
 
 
-#endif // HYSBURG_LOOPER_H
+#endif // HYSBURG_EVENT_LOOP_H
