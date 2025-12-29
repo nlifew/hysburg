@@ -48,14 +48,19 @@ static void testClient() {
             .eventLoop(executor)
             .channel(&channel)
             .emplaceHandler<ChannelInitializer>([&factory](Channel &channel) {
+                auto tlsContext = factory->newInstance(TLSMode::TLS_CLIENT);
                 channel.pipeline()
-                        .emplaceLast<TLSContextHandler>(factory, TLSMode::S2N_CLIENT)
+                        .emplaceLast<TLSContextHandler>(std::move(tlsContext))
                         .emplaceLast<ClientHandler>();
             })
-            .connect("www.baidu.com", 443);
+//            .connect("www.baidu.com", 443)
+            .connect("localhost", 8443)
+            ->addListener([](auto &future) {
+                if (!future.isSuccess()) { abort(); }
+            });
 
     channel->closeFuture()->addListener([executor](auto &) {
-        executor->quit();
+        exit(0);
     });
 
     executor->loop();
@@ -80,7 +85,7 @@ static void testServer() {
         .channel(&channel)
         .childHandler<ChannelInitializer>([&factory](Channel &channel) {
             channel.pipeline()
-                .emplaceLast<TLSContextHandler>(factory, TLSMode::S2N_SERVER)
+                .emplaceLast<TLSContextHandler>(factory, TLSMode::TLS_SERVER)
                 .emplaceLast<ServerHandler>();
         });
 
@@ -90,7 +95,7 @@ static void testServer() {
         .get()->addListener(channel->closeOnFailure());
 
     channel->closeFuture()->addListener([&executor](auto &) {
-        executor->quit();
+        exit(0);
     });
     executor->loop();
 }

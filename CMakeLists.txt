@@ -34,6 +34,7 @@ add_library(
         runtime
         STATIC
         channel/Channel.cpp
+        channel/TLSContext.cpp
 )
 target_link_libraries(
         runtime
