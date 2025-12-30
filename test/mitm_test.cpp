@@ -83,15 +83,15 @@ struct MyHandler: ChannelInboundHandler {
     void channelActive(ChannelHandlerContext &ctx) override {
         ctx.fireChannelActive();
         mTLSContext->setClientHelloCallback([this, &ctx]() -> int {
-            LOGI("on client hello");
+            LOGI("on client hello, sni='%s'", mTLSContext->sni());
             switch (mStatus) {
                 case Status::INIT:
                     startConnect(ctx);
                     mStatus = Status::PENDING;
                 case PENDING:
-                    return SSL_CLIENT_HELLO_RETRY;
+                    return TLSContext::CLIENT_HELLO_RETRY;
                 case READY:
-                    return SSL_CLIENT_HELLO_SUCCESS;
+                    return TLSContext::CLIENT_HELLO_SUCCESS;
             }
         });
     }
@@ -164,27 +164,22 @@ struct MyHandler: ChannelInboundHandler {
         fake_x509->setPubKey(fake_pkey);
 
         // 处理扩展 (Extensions) —— 核心部分
-        auto san = original_cert.getExt(NID_subject_alt_name, -1);
-        if (san != nullptr) {
-            fake_x509->addExt(san, -1);
+        // 这里使用白名单而不是黑名单策略，拓展太多太多了，但凡多放行一个就会噶
+        for (auto it : {
+                // 这是最重要的，包含了域名和 IP
+                NID_subject_alt_name,
+                // 这决定了证书是不是 CA
+                NID_basic_constraints,
+                // 客户端会检查证书用途（比如握手时用于签名还是加密）。拷贝它可以保证用途和原证书一致
+                NID_key_usage,
+                // 包含了 Server Auth / Client Auth
+                NID_ext_key_usage,
+        }) {
+            if (auto ext = original_cert.getExt(it); ext != nullptr) {
+                fake_x509->addExt(ext);
+            }
         }
 
-        // 添加 Basic Constraints (表明这不是一个 CA)
-        {
-            std::unique_ptr<X509_EXTENSION, decltype(&X509_EXTENSION_free)> ext(
-                    X509V3_EXT_conf_nid(nullptr, nullptr, NID_basic_constraints, "CA:FALSE"),
-                    X509_EXTENSION_free
-            );
-            fake_x509->addExt(ext.get());
-        }
-        // 添加 Key Usage
-        {
-            std::unique_ptr<X509_EXTENSION, decltype(&X509_EXTENSION_free)> ext(
-                    X509V3_EXT_conf_nid(nullptr, nullptr, NID_key_usage, "digitalSignature, keyEncipherment"),
-                    X509_EXTENSION_free
-            );
-            fake_x509->addExt(ext.get());
-        }
         auto ok = fake_x509->sign(ca_key, EVP_sha256());
         assert(ok);
         return fake_x509;

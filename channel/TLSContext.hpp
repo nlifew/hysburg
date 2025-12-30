@@ -7,7 +7,6 @@
 #include <vector>
 #include <openssl/ssl.h>
 #include <openssl/err.h>
-#include <openssl/x509v3.h>
 
 #include "ChannelHandler.hpp"
 
@@ -58,19 +57,14 @@ public:
     }
 
     static EvpKeyPtr fromRSA(int bitCount) {
-//        auto key = std::make_shared<EvpKey>();
-//        std::unique_ptr<BIGNUM, decltype(&BN_free)> bne(BN_new(), BN_free);
-//        std::unique_ptr<RSA, decltype(&RSA_free)> rsa(RSA_new(), RSA_free);
-//
-//        BN_set_word(bne.get(), RSA_F4);
-//        RSA_generate_key_ex(rsa.get(), bitCount, bne.get(), nullptr);
-//        EVP_PKEY_assign_RSA(key->handle(), rsa.release()); // rsa 已经被 assign 管理，不需要释放 RSA，但 bne 需要释放
-//        return key;
-        auto key = EVP_PKEY_Q_keygen(nullptr, nullptr, "RSA", bitCount);
-        if (key == nullptr) {
-            return nullptr;
-        }
-        return std::make_shared<EvpKey>(key);
+        auto key = std::make_shared<EvpKey>();
+        std::unique_ptr<BIGNUM, decltype(&BN_free)> bne(BN_new(), BN_free);
+        std::unique_ptr<RSA, decltype(&RSA_free)> rsa(RSA_new(), RSA_free);
+
+        BN_set_word(bne.get(), RSA_F4);
+        RSA_generate_key_ex(rsa.get(), bitCount, bne.get(), nullptr);
+        EVP_PKEY_assign_RSA(key->mKey, rsa.release()); // rsa 已经被 assign 管理，不需要释放 RSA，但 bne 需要释放
+        return key;
     }
 
     explicit EvpKey(EVP_PKEY *key): mKey(key) {
@@ -168,7 +162,9 @@ enum TLSMode {
 
 class TLSContext: std::enable_shared_from_this<TLSContext> {
 public:
-    using SniCallback = std::function<int(TLSContext&, const std::string_view &)>;
+    static constexpr int CLIENT_HELLO_SUCCESS = ssl_select_cert_result_t::ssl_select_cert_success;
+    static constexpr int CLIENT_HELLO_RETRY = ssl_select_cert_result_t::ssl_select_cert_retry;
+    static constexpr int CLIENT_HELLO_ERROR = ssl_select_cert_result_t::ssl_select_cert_error;
     using ClientHelloCallback = std::function<int()>;
 
 private:
@@ -184,20 +180,12 @@ private:
      * 开发者传进去的指针，但不是很确定。此处保险起见放一个 std::string
      */
     std::string mSni;
-    SniCallback mSniCallback;
     ClientHelloCallback mClientHelloCallback;
 
-    int dispatchSniCallback() {
-        auto ret = SSL_TLSEXT_ERR_OK;
-        auto name = SSL_get_servername(mSSL, TLSEXT_NAMETYPE_host_name);
-        if (mSniCallback != nullptr) { ret = mSniCallback(*this, name ? name : ""); }
-        return ret;
-    }
-
-    int dispatchClientHello() {
-        auto ret = SSL_CLIENT_HELLO_SUCCESS;
+    ssl_select_cert_result_t dispatchClientHello(const SSL_CLIENT_HELLO *) {
+        auto ret = ssl_select_cert_success;
         if (mClientHelloCallback != nullptr) {
-            ret = mClientHelloCallback();
+            ret = static_cast<ssl_select_cert_result_t>(mClientHelloCallback());
         }
         return ret;
     }
@@ -244,7 +232,7 @@ public:
         switch (ret = SSL_get_error(mSSL, ret)) {
             case SSL_ERROR_WANT_READ:
             case SSL_ERROR_WANT_WRITE:
-            case SSL_ERROR_WANT_CLIENT_HELLO_CB:
+            case SSL_ERROR_PENDING_CERTIFICATE:
                 return HandshakeResult::AGAIN;
         }
         std::string stacktrace;
@@ -306,6 +294,11 @@ public:
         SSL_set_tlsext_host_name(mSSL, mSni.c_str());
     }
 
+    const char *sni() {
+        auto it = SSL_get_servername(mSSL, TLSEXT_NAMETYPE_host_name);
+        return it ? it : "";
+    }
+
     [[nodiscard]]
     TLSMode mode() const { return mMode; }
 
@@ -315,7 +308,6 @@ public:
         return std::make_shared<X509Certificate>(x509);
     }
 
-    void setSniCallback(SniCallback cb) { mSniCallback.swap(cb); }
     void setClientHelloCallback(ClientHelloCallback cb) { mClientHelloCallback.swap(cb); }
 
     bool setCert(X509Certificate &cert, EvpKey &key) {
@@ -350,7 +342,7 @@ class TLSContextFactory: public std::enable_shared_from_this<TLSContextFactory> 
 public:
     explicit TLSContextFactory() {
         mSSLCtx = SSL_CTX_new(TLS_method());
-        auto ret = SSL_CTX_set_min_proto_version(mSSLCtx, TLS1_2_VERSION);
+        long int ret = SSL_CTX_set_min_proto_version(mSSLCtx, TLS1_2_VERSION);
         CHECK(ret == 1, "SSL_CTX_set_min_proto_version() == %ld", ret)
 
         ret = SSL_CTX_set_max_proto_version(mSSLCtx, TLS1_3_VERSION);
@@ -362,14 +354,17 @@ public:
         ret = SSL_CTX_set_default_verify_paths(mSSLCtx);
         CHECK(ret == 1, "SSL_CTX_set_default_verify_paths() = %ld", ret)
 
+        // 启用 grease
+        SSL_CTX_set_grease_enabled(mSSLCtx, 1);
+
         SSL_CTX_set_app_data(mSSLCtx, this);
-        SSL_CTX_set_tlsext_servername_callback(mSSLCtx, +[](SSL *s, int *, void *) -> int {
-            return static_cast<TLSContext*>(SSL_get_app_data(s))->dispatchSniCallback();
-        });
-        SSL_CTX_set_client_hello_cb(mSSLCtx, +[](SSL *s, int *, void *) -> int {
-            return static_cast<TLSContext*>(SSL_get_app_data(s))->dispatchClientHello();
-        }, this);
-//        SSL_CTX_set_alpn_select_cb(mSSLCtx, );
+        SSL_CTX_set_select_certificate_cb(
+                mSSLCtx,
+                +[](const SSL_CLIENT_HELLO *sch) -> ssl_select_cert_result_t {
+                    auto self = static_cast<TLSContext*>(SSL_get_app_data(sch->ssl));
+                    return self->dispatchClientHello(sch);
+                }
+        );
     }
 
     NO_COPY(TLSContextFactory)

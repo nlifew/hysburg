@@ -4,12 +4,6 @@ project(hysburg)
 set(CMAKE_CXX_STANDARD 17)
 SET(CMAKE_INCLUDE_CURRENT_DIR ON)
 
-include_directories(/opt/homebrew/include)
-link_directories(/opt/homebrew/lib)
-
-include_directories(/usr/local/include)
-link_directories(/usr/local/lib)
-
 add_subdirectory(test)
 
 add_subdirectory(third_party)
@@ -39,6 +33,7 @@ add_library(
 target_link_libraries(
         runtime
         uv_a
+#        decrepit
         ssl
         crypto
         llhttp_static

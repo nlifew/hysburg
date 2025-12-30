@@ -19,3 +19,12 @@ FetchContent_Declare(
 )
 set(LIBUV_BUILD_SHARED OFF CACHE INTERNAL "")
 FetchContent_MakeAvailable(libuv)
+
+
+FetchContent_Declare(
+        boringssl
+        URL
+        "https://github.com/google/boringssl/archive/refs/tags/0.20251124.0.zip"
+)
+set(BUILD_TESTING OFF CACHE INTERNAL "")
+FetchContent_MakeAvailable(boringssl)
