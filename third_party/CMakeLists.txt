@@ -1,5 +1,6 @@
 
 include(FetchContent)
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 FetchContent_Declare(
         llhttp
@@ -10,3 +11,11 @@ FetchContent_Declare(
 set(BUILD_SHARED_LIBS OFF CACHE INTERNAL "")
 set(BUILD_STATIC_LIBS ON CACHE INTERNAL "")
 FetchContent_MakeAvailable(llhttp)
+
+FetchContent_Declare(
+        libuv
+        URL
+        "https://github.com/libuv/libuv/archive/refs/tags/v1.51.0.zip"
+)
+set(LIBUV_BUILD_SHARED OFF CACHE INTERNAL "")
+FetchContent_MakeAvailable(libuv)

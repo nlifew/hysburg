@@ -38,7 +38,7 @@ add_library(
 )
 target_link_libraries(
         runtime
-        uv
+        uv_a
         ssl
         crypto
         llhttp_static
