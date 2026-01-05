@@ -3,8 +3,7 @@
 #define HYSBURG_UTIL_HPP
 
 #include <string>
-#include <random>
-#include <exception>
+//#include <random>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 
@@ -85,39 +84,39 @@ struct Numbers
         return value;
     }
 
-    static std::default_random_engine &getRandomEngine()
-    {
-        static std::default_random_engine e(std::random_device().operator()());
-        return e;
-    }
-
-    template<typename T>
-    static T randomInt() {
-        std::uniform_int_distribution<T> dis;
-        return dis(getRandomEngine());
-    }
-
-    template<typename T>
-    static T randomInt(T min, T max) {
-        auto value = randomInt<T>();
-        return value % (max - min + 1) + min;
-    }
-
-    static void writeRandom(void *out, size_t len)
-    {
-        auto ptr = (uint8_t *) out;
-
-        while (len >= 8) {
-            *((uint64_t *) ptr) = randomInt<uint64_t>();
-            len -= 8;
-            ptr += 8;
-        }
-        while (len > 0) {
-            *ptr = randomInt<uint8_t>();
-            len -= 1;
-            ptr += 1;
-        }
-    }
+//    static std::default_random_engine &getRandomEngine()
+//    {
+//        static std::default_random_engine e(std::random_device().operator()());
+//        return e;
+//    }
+//
+//    template<typename T>
+//    static T randomInt() {
+//        std::uniform_int_distribution<T> dis;
+//        return dis(getRandomEngine());
+//    }
+//
+//    template<typename T>
+//    static T randomInt(T min, T max) {
+//        auto value = randomInt<T>();
+//        return value % (max - min + 1) + min;
+//    }
+//
+//    static void writeRandom(void *out, size_t len)
+//    {
+//        auto ptr = (uint8_t *) out;
+//
+//        while (len >= 8) {
+//            *((uint64_t *) ptr) = randomInt<uint64_t>();
+//            len -= 8;
+//            ptr += 8;
+//        }
+//        while (len > 0) {
+//            *ptr = randomInt<uint8_t>();
+//            len -= 1;
+//            ptr += 1;
+//        }
+//    }
 };
 
 struct Net
