@@ -24,11 +24,21 @@ add_link_options(
 #        "-fsanitize=thread"
 )
 
+set(RUNTIME_SOURCES
+        channel/Channel.cpp
+        channel/TLSContext.cpp
+        channel/UdpSocket_unix.cpp
+)
+if (CMAKE_SYSTEM_NAME MATCHES "Darwin")
+    list(APPEND RUNTIME_SOURCES channel/UdpSocket_osx.cpp)
+elseif (CMAKE_SYSTEM_NAME MATCHES "Linux")
+    list(APPEND RUNTIME_SOURCES channel/UdpSocket_linux.cpp)
+endif ()
+
 add_library(
         runtime
         STATIC
-        channel/Channel.cpp
-        channel/TLSContext.cpp
+        ${RUNTIME_SOURCES}
 )
 target_link_libraries(
         runtime
