@@ -126,3 +126,129 @@ int UdpSocket::setEcnEnabled(bool enabled) {
     return ret;
 }
 
+#if __APPLE__
+/**
+ * libuv 的实现也是参考的这里：
+ * https://github.com/apple/darwin-xnu/blob/main/bsd/sys/socket.h
+ */
+struct mmsghdr {
+    msghdr msg_hdr;
+    size_t msg_len;    /* byte length of buffer in msg_iov */
+};
+
+extern "C" ssize_t sendmsg_x(int s, const struct mmsghdr *msgp, u_int cnt, int flags);
+extern "C" ssize_t recvmsg_x(int s, const struct mmsghdr *msgp, u_int cnt, int flags);
+
+static ssize_t sendmmsg(int fd, mmsghdr *mmsg, u_int cnt, int flags) {
+    return ::sendmsg_x(fd, mmsg, cnt, flags);
+}
+static ssize_t recvmmsg(int fd, mmsghdr *mmsg, u_int cnt, int flags, const timespec *) {
+    return ::recvmsg_x(fd, mmsg, cnt, flags);
+}
+#endif
+
+
+/**
+ * 每次调用 recv/send，最多发送 64 个包
+ */
+static constexpr int PACKET_MAX_SIZE = 64;
+
+/**
+ * CMSG 最大设置为 128 字节
+ */
+struct CMsgBuf {
+    char data[128];
+};
+// sizeof(in6_pktinfo): 存放 src、dest addr
+// sizeof(int): 存放 ecn
+static_assert(sizeof(CMsgBuf) >= sizeof(cmsghdr) + sizeof(in6_pktinfo) + sizeof(int) + 8);
+
+
+ssize_t UdpSocket::recvFrom(UdpSocket::Packet *packets, int len) {
+    std::array<mmsghdr, PACKET_MAX_SIZE> msghdrBuf;
+    std::array<CMsgBuf, PACKET_MAX_SIZE> cmsgBuf;
+
+    len = std::min(len, PACKET_MAX_SIZE);
+    for (int i = 0; i < len; i ++) {
+        msghdrBuf[i].msg_hdr = {
+                .msg_name = packets[i].src,
+                .msg_namelen = sizeof(sockaddr_storage),
+                .msg_iov = packets[i].vec,
+                .msg_iovlen = static_cast<decltype(msghdrBuf[i].msg_hdr.msg_iovlen)>(packets[i].vecLen),
+                .msg_control = cmsgBuf[i].data,
+                .msg_controllen = sizeof(cmsgBuf[i].data),
+                .msg_flags = 0,
+        };
+        msghdrBuf[i].msg_len = 0;
+    }
+
+    auto port = getLocalPort();
+    auto ret = ::recvmmsg(mFd, msghdrBuf.data(), len, MSG_DONTWAIT, nullptr);
+
+    for (int i = 0; i < ret; i ++) {
+        packets[i].ecn = -1;
+        packets[i].flag = 0;
+        packets[i].dataLen = static_cast<int>(msghdrBuf[i].msg_len);
+
+        auto dest = packets[i].dest;
+        if (dest != nullptr) {
+            dest->ss_family = AF_UNSPEC;
+        }
+
+        auto msg = &msghdrBuf[i].msg_hdr;
+        for (auto* cmsg = CMSG_FIRSTHDR(msg); cmsg; cmsg = CMSG_NXTHDR(msg, cmsg)) {
+            if (packets[i].ecn == -1) {
+                UnixUdpSocket::recvEcn(cmsg, &packets[i].ecn);
+            }
+            if (dest != nullptr && dest->ss_family == AF_UNSPEC) {
+                UnixUdpSocket::recvDestAddr(cmsg, dest, port);
+            }
+        }
+
+        auto flag = msg->msg_flags;
+        if ((flag & FLAG_TRUNC)) { packets[i].flag |= FLAG_TRUNC; }
+    }
+    return ret;
+}
+
+ssize_t UdpSocket::sendTo(UdpSocket::Packet *packets, int len) {
+    std::array<CMsgBuf, PACKET_MAX_SIZE> cmsgBuf;
+    std::array<mmsghdr, PACKET_MAX_SIZE> msghdrBuf;
+
+    len = std::min(len, PACKET_MAX_SIZE);
+    for (int i = 0; i < len; ++i) {
+        msghdrBuf[i].msg_len = 0;
+        auto *msg = &msghdrBuf[i].msg_hdr;
+        *msg = {
+                .msg_name = packets[i].dest,
+                .msg_namelen = Net::getSockLen(packets[i].dest->ss_family),
+                .msg_iov = packets[i].vec,
+                .msg_iovlen = static_cast<decltype(msg->msg_iovlen)>(packets[i].vecLen),
+                .msg_control = cmsgBuf[i].data,
+                .msg_controllen = 0,
+                .msg_flags = 0,
+        };
+        if ((mFlag & FLAG_ECN_ENABLED) != 0) {
+            UnixUdpSocket::sendEcn(msg, mFamily, packets[i].ecn & 0x03);
+        }
+        if (packets[i].src != nullptr && (mFlag & FLAG_PKI_ENABLED) != 0) {
+            UnixUdpSocket::sendSourceAddr(msg, packets[i].src);
+        }
+        if (msg->msg_controllen <= 0) {
+            msg->msg_control = nullptr;
+            msg->msg_controllen = 0;
+        }
+        if (msg->msg_controllen > sizeof(CMsgBuf)) {
+            LOGE("msg_controllen > sizeof(CMsgBuf), %zu, %zu",
+                 (size_t) msg->msg_controllen, sizeof(CMsgBuf)
+            );
+            return -1;
+        }
+    }
+    auto ret = ::sendmmsg(mFd, msghdrBuf.data(), len, MSG_DONTWAIT);
+    for (int i = 0; i < ret; i ++) {
+        packets[i].flag = msghdrBuf[i].msg_hdr.msg_flags;
+        packets[i].dataLen = static_cast<int>(msghdrBuf[i].msg_len);
+    }
+    return ret;
+}

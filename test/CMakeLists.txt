@@ -12,3 +12,6 @@ target_link_libraries(socks5_test runtime)
 
 add_executable(mitm_test mitm_test.cpp)
 target_link_libraries(mitm_test runtime)
+
+add_executable(udp_test udp_test.cpp)
+target_link_libraries(udp_test runtime)

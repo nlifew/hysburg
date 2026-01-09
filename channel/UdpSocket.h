@@ -3,6 +3,8 @@
 #define HYSBURG_UDPSOCKET_H
 
 #include <unistd.h>
+#include <functional>
+#include <memory>
 #include <uv.h>
 #include "Util.hpp"
 
@@ -32,31 +34,32 @@ public:
     };
 
 private:
+    static void deleteUvPoll(uv_poll_t *poll) {
+        if (poll == nullptr) {
+            return;
+        }
+        uv_close(reinterpret_cast<uv_handle_t*>(poll), [](auto handle) {
+            delete handle;
+        });
+    }
+
     int mFamily = AF_UNSPEC;
     uv_os_sock_t mFd {};
-    std::unique_ptr<uv_poll_t> mPoll;
+    std::unique_ptr<uv_poll_t, decltype(&deleteUvPoll)> mPoll { nullptr, deleteUvPoll };
     OnReadableListener mReadableListener = nullptr;
 
     sockaddr_storage mBindAddress {};
 
     int32_t mFlag = 0;
     int mLocalPort = 0;
-    int initSocket(int family);
     void closeSocket();
-
 public:
     explicit UdpSocket() = default;
     ~UdpSocket() noexcept { close(); }
 
     NO_COPY(UdpSocket)
 
-    int initFd(int family) {
-        if (auto ret = initSocket(family); ret < 0) {
-            LOGE("failed to init socket: '%d', errno='%d'", mFd, errno);
-            return ret;
-        }
-        return 0;
-    }
+    int initSocket(int family);
 
     int bind(const sockaddr_storage &local);
     int getLocalAddress(sockaddr_storage *out);
@@ -89,7 +92,7 @@ public:
     int poll(uv_loop_t *loop, OnReadableListener listener) {
         mReadableListener = std::move(listener);
 
-        mPoll = std::make_unique<uv_poll_t>();
+        mPoll.reset(new uv_poll_t);
         if (auto ret = uv_poll_init_socket(loop, mPoll.get(), mFd); ret < 0) {
             LOGE("failed to init uv_poll_t: '%d'", ret);
             return ret;
@@ -97,11 +100,18 @@ public:
         mPoll->data = this;
 
         uv_poll_cb callback = [](uv_poll_t* handle, int status, int events) {
-            LOGI("uv_poll_start callback: status='%d', events='%d'", status, events);
-            if (status != 0 || (events & UV_READABLE) == 0) {
+            LOGI("uv_poll_start callback: status='(%s)%d', events='%d'", uv_err_name(status), status, events);
+            auto self = static_cast<UdpSocket*>(handle->data);
+            if (status != 0) {
+                int error = 0;
+                socklen_t errlen = sizeof(error);
+                getsockopt(self->mFd, SOL_SOCKET, SO_ERROR, (void *)&error, &errlen);
+                LOGE("sock err:'%d'", error);
+                return;
+            }
+            if ((events & UV_READABLE) == 0) {
                 return ;
             }
-            auto self = static_cast<UdpSocket*>(handle->data);
             if (self->mReadableListener != nullptr) {
                 self->mReadableListener();
             }
@@ -126,9 +136,7 @@ public:
             if ((mFlag & FLAG_POLL_START) != 0) {
                 stop();
             }
-            uv_close((uv_handle_t *) mPoll.release(), [](uv_handle_t* handle) {
-                delete handle;
-            });
+            mPoll = nullptr;
         }
         closeSocket();
         bzero(&mBindAddress, sizeof(mBindAddress));

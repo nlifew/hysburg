@@ -85,7 +85,7 @@ struct UnixUdpSocket {
 
     static int recvDestAddr(const cmsghdr *cmsg, sockaddr_storage *out, int port) {
         if (cmsg->cmsg_level == IPPROTO_IP && cmsg->cmsg_type == IP_PKTINFO) {
-            auto pkiInfo = reinterpret_cast<in_pktinfo*>(CMSG_DATA(cmsg));
+            auto pkiInfo = reinterpret_cast<const in_pktinfo*>(CMSG_DATA(cmsg));
             auto ipv4 = reinterpret_cast<sockaddr_in*>(out);
             ipv4->sin_family = AF_INET;
             ipv4->sin_addr = pkiInfo->ipi_addr;
@@ -93,7 +93,7 @@ struct UnixUdpSocket {
             return 0;
         }
         if (cmsg->cmsg_level == IPPROTO_IP && cmsg->cmsg_type == IPV6_PKTINFO) {
-            auto pkiInfo = reinterpret_cast<in6_pktinfo*>(CMSG_DATA(cmsg));
+            auto pkiInfo = reinterpret_cast<const in6_pktinfo*>(CMSG_DATA(cmsg));
             auto ipv6 = reinterpret_cast<sockaddr_in6*>(out);
             ipv6->sin6_family = AF_INET;
             ipv6->sin6_addr = pkiInfo->ipi6_addr;
@@ -105,12 +105,12 @@ struct UnixUdpSocket {
 
     static int recvEcn(const cmsghdr *cmsg, int *ecn) {
         if (cmsg->cmsg_level == IPPROTO_IP && (cmsg->cmsg_type == IP_TOS || cmsg->cmsg_type == IP_RECVTOS)) {
-            auto tos = *static_cast<uint8_t*>(CMSG_DATA(cmsg));
+            auto tos = *reinterpret_cast<const uint8_t*>(CMSG_DATA(cmsg));
             *ecn = tos & 0x03;
             return 0;
         }
         if (cmsg->cmsg_level == IPPROTO_IPV6 && cmsg->cmsg_type == IPV6_TCLASS) {
-            auto tc = *static_cast<uint8_t*>(CMSG_DATA(cmsg));
+            auto tc = *reinterpret_cast<const uint8_t*>(CMSG_DATA(cmsg));
             *ecn = tc & 0x03;
         }
         return -1;
