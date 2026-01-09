@@ -422,7 +422,6 @@ class TLSContextHandler: public ChannelDuplexHandler {
     State mState = State::INIT;
 
     void decode(ChannelHandlerContext &ctx) {
-        assert(mMyId == Log::threadId());
         if (mState == State::INIT) {
             onInit(ctx);
         }
@@ -493,7 +492,6 @@ class TLSContextHandler: public ChannelDuplexHandler {
     }
 
     void encode(ChannelHandlerContext &, ByteBuf &byteBuf, const PromisePtr<void>& promise) {
-        assert(mMyId == Log::threadId());
         bool ok = true;
         if (mState == State::HANDSHAKE) {
             mTmpWriteBuff.cumulate(byteBuf);
@@ -517,14 +515,12 @@ class TLSContextHandler: public ChannelDuplexHandler {
 
 public:
     void handlerAdded(ChannelHandlerContext &ctx) override {
-        assert(mMyId == Log::threadId());
         if (mTLSContext->mode() == TLSMode::TLS_CLIENT && ctx.channel().isActive()) {
             decode(ctx);
         }
     }
 
     void channelActive(hysburg::ChannelHandlerContext &ctx) override {
-        assert(mMyId == Log::threadId());
         if (mTLSContext->mode() == TLSMode::TLS_CLIENT) {
             decode(ctx);
         }
@@ -532,7 +528,6 @@ public:
     }
 
     void channelRead(ChannelHandlerContext &ctx, AnyPtr msg) override {
-        assert(mMyId == Log::threadId());
         if (!msg->is<ByteBuf>()) {
             ctx.fireChannelRead(std::move(msg));
             return;
@@ -542,7 +537,6 @@ public:
     }
 
     void write(ChannelHandlerContext &ctx, AnyPtr msg, PromisePtr<void> promise) override {
-        assert(mMyId == Log::threadId());
         if (!msg->is<ByteBuf>()) {
             ctx.write(std::move(msg), std::move(promise));
             return;
@@ -551,7 +545,6 @@ public:
     }
 
     void flush(ChannelHandlerContext &ctx) override {
-        assert(mMyId == Log::threadId());
         auto msg = makeAny<ByteBuf>();
         auto byteBuf = msg->as<ByteBuf>();
         mTLSContext->read(*byteBuf);
@@ -561,7 +554,6 @@ public:
     }
 
     void close(ChannelHandlerContext &ctx) override {
-        assert(mMyId == Log::threadId());
         if (mState != State::ERROR) {
             mTLSContext->shutdown();
         }

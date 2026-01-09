@@ -66,7 +66,7 @@ class DnsRequest {
                 return -1;
             }
         }
-        LOGI("dns resolve ok, '%s' -> '%s', cost '%llu' ms.",
+        LOGI("dns resolve ok, '%s' -> '%s', cost '%" PRIu64 "' ms.",
              mName.c_str(), Net::stringOf(&dest.addr).c_str(),
              Log::currentTimeMillis() - mBeginTime
         );

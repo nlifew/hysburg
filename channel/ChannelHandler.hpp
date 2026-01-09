@@ -182,16 +182,6 @@ public:
 template<typename MsgType>
 class MessageToByteEncoder: public ChannelOutboundHandler
 {
-    template<typename T>
-    void callEncode(ChannelHandlerContext &ctx, Any &msg, ByteBuf &out) {
-        encode(ctx, *msg.as<T>(), out);
-    }
-
-    template<>
-    void callEncode<Any>(ChannelHandlerContext &ctx, Any &msg, ByteBuf &out) {
-        encode(ctx, msg, out);
-    }
-
 protected:
     virtual bool acceptOutboundMessage(Any &msg) {
         return msg.is<MsgType>();
@@ -204,9 +194,14 @@ protected:
             ctx.write(std::move(msg), std::move(promise));
             return;
         }
-        auto byteBuf = makeAny<ByteBuf>();
-        callEncode<MsgType>(ctx, *msg, *byteBuf->as<ByteBuf>());
-        ctx.write(std::move(byteBuf), std::move(promise));
+        AnyPtr any;
+        auto byteBuf = makeAnyIn<ByteBuf>(any);
+        if constexpr (std::is_same_v<MsgType, Any>) {
+            encode(ctx, msg, *byteBuf);
+        } else {
+            encode(ctx, *msg->as<MsgType>(), *byteBuf);
+        }
+        ctx.write(std::move(any), std::move(promise));
     }
 public:
     explicit MessageToByteEncoder() = default;
@@ -353,15 +348,12 @@ public:
 template <typename MsgType>
 class SimpleInboundChannelHandler: public ChannelInboundHandler
 {
-    template<typename T>
-    bool isType(Any &msg) const { return msg.is<T>(); }
-
-    template<>
-    bool isType<Any>(Any &) const { return true; }
-
 protected:
     virtual bool acceptInboundMessage(Any &msg) {
-        return isType<MsgType>(msg);
+        if constexpr (std::is_same_v<MsgType, Any>) {
+            return true;
+        }
+        return msg.is<MsgType>();
     }
 
     virtual void channelRead0(ChannelHandlerContext &ctx, MsgType &msg) = 0;

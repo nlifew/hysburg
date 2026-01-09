@@ -2,6 +2,7 @@
 #ifndef HYSBURG_FUTURE_HPP
 #define HYSBURG_FUTURE_HPP
 
+#include <variant>
 #include "EventLoop.hpp"
 
 namespace hysburg {

@@ -2,6 +2,7 @@
 #ifndef HYSBURG_LOG_HPP
 #define HYSBURG_LOG_HPP
 
+#include <cinttypes>
 #include <cstdio>
 #include <ctime>
 #include <chrono>
@@ -13,10 +14,10 @@
 #define __FILE_NAME__ (strrchr(__FILE__, '/') ? strrchr(__FILE__, '/') + 1 : __FILE__)
 #endif
 
-#define LOGI(fmt, ...) fprintf(stderr, "%s %llu I/LOG: %s(%d):" fmt "\n", Log::formatTime(), Log::threadId(), __FILE_NAME__, __LINE__, ##__VA_ARGS__)
-#define LOGD(fmt, ...) fprintf(stderr, "%s %llu D/LOG: %s(%d):" fmt "\n", Log::formatTime(), Log::threadId(), __FILE_NAME__, __LINE__, ##__VA_ARGS__)
-#define LOGW(fmt, ...) fprintf(stderr, "%s %llu W/LOG: %s(%d):" fmt "\n", Log::formatTime(), Log::threadId(), __FILE_NAME__, __LINE__, ##__VA_ARGS__)
-#define LOGE(fmt, ...) fprintf(stderr, "%s %llu E/LOG: %s(%d):" fmt "\n", Log::formatTime(), Log::threadId(), __FILE_NAME__, __LINE__, ##__VA_ARGS__)
+#define LOGI(fmt, ...) fprintf(stderr, "%s %" PRIu64 " I/LOG: %s(%d):" fmt "\n", Log::formatTime(), Log::threadId(), __FILE_NAME__, __LINE__, ##__VA_ARGS__)
+#define LOGD(fmt, ...) fprintf(stderr, "%s %" PRIu64 " D/LOG: %s(%d):" fmt "\n", Log::formatTime(), Log::threadId(), __FILE_NAME__, __LINE__, ##__VA_ARGS__)
+#define LOGW(fmt, ...) fprintf(stderr, "%s %" PRIu64 " W/LOG: %s(%d):" fmt "\n", Log::formatTime(), Log::threadId(), __FILE_NAME__, __LINE__, ##__VA_ARGS__)
+#define LOGE(fmt, ...) fprintf(stderr, "%s %" PRIu64 " E/LOG: %s(%d):" fmt "\n", Log::formatTime(), Log::threadId(), __FILE_NAME__, __LINE__, ##__VA_ARGS__)
 #define PLOGE(fmt, ...) do { LOGE(fmt "\nerrno=%d(%s)", ##__VA_ARGS__, errno, strerror(errno)); std::terminate(); } while (0)
 
 
