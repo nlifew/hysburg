@@ -1,12 +1,12 @@
 cmake_minimum_required(VERSION 3.25.1)
 project(hysburg)
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 SET(CMAKE_INCLUDE_CURRENT_DIR ON)
 
 add_subdirectory(test)
-
 add_subdirectory(third_party)
+
 add_compile_options(
         "-Wall"
         "-Wextra"
@@ -27,12 +27,12 @@ add_link_options(
 set(RUNTIME_SOURCES
         channel/Channel.cpp
         channel/TLSContext.cpp
-        channel/UdpSocket_unix.cpp
+        udp/UdpSocket_unix.cpp
 )
 if (CMAKE_SYSTEM_NAME MATCHES "Darwin")
-    list(APPEND RUNTIME_SOURCES channel/UdpSocket_osx.cpp)
+    list(APPEND RUNTIME_SOURCES udp/UdpSocket_osx.cpp)
 elseif (CMAKE_SYSTEM_NAME MATCHES "Linux")
-    list(APPEND RUNTIME_SOURCES channel/UdpSocket_linux.cpp)
+    list(APPEND RUNTIME_SOURCES udp/UdpSocket_linux.cpp)
 endif ()
 
 add_library(
@@ -40,12 +40,14 @@ add_library(
         STATIC
         ${RUNTIME_SOURCES}
 )
+
 target_link_libraries(
         runtime
-        uv_a
-#        decrepit
+        lsquic
+        #        decrepit
         ssl
         crypto
+        uv_a
         llhttp_static
 )
 

@@ -3,7 +3,7 @@
 #define __APPLE_USE_RFC_3542
 #endif
 
-#include <uv.h>
+#include "_deps/libuv-src/include/uv.h"
 
 #include "Log.hpp"
 #include "UdpSocket.h"

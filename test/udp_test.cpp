@@ -1,6 +1,6 @@
 #include <cassert>
 
-#include "channel/UdpSocket.h"
+#include "udp/UdpSocket.h"
 #include "channel/EventLoop.hpp"
 
 using namespace hysburg;

@@ -510,9 +510,6 @@ class TLSContextHandler: public ChannelDuplexHandler {
             }
         }
     }
-
-    uint64_t mMyId = Log::threadId();
-
 public:
     void handlerAdded(ChannelHandlerContext &ctx) override {
         if (mTLSContext->mode() == TLSMode::TLS_CLIENT && ctx.channel().isActive()) {

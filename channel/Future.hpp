@@ -46,7 +46,7 @@ class Future: public std::enable_shared_from_this<Future<T>> {
 
     std::mutex mMutex;
     std::condition_variable mCond;
-    volatile int mListenerId = 1;
+    int mListenerId = 1;
 
     using ValueType = std::conditional_t<std::is_void_v<T>, std::monostate, T>;
     ValueType mValue {};
