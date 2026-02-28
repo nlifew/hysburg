@@ -107,16 +107,22 @@ protected:
         }
     }
 
-    void doOption(hysburg::ChannelOption key, int value) override {
-        switch (key) {
+    void doOption(int key, void *value) override {
+        switch (static_cast<ChannelOption>(key)) {
             case ChannelOption::KEEP_ALIVE:
-                uv_tcp_keepalive(&mTcp, value, 1);
+                uv_tcp_keepalive(&mTcp, *static_cast<int*>(value), 1);
                 break;
             case ChannelOption::NO_DELAY:
-                uv_tcp_nodelay(&mTcp, value);
+                uv_tcp_nodelay(&mTcp, *static_cast<int*>(value));
+                break;
+            case ChannelOption::SEND_BUF_SIZE:
+                uv_send_buffer_size(reinterpret_cast<uv_handle_t*>(&mTcp), static_cast<int*>(value));
+                break;
+            case ChannelOption::RECV_BUF_SIZE:
+                uv_recv_buffer_size(reinterpret_cast<uv_handle_t*>(&mTcp), static_cast<int*>(value));
                 break;
             default:
-                LOGW("unknown channel option: '%d'", value);
+                LOGW("unknown channel option: '%d'", key);
                 break;
         }
     }

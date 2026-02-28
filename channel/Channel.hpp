@@ -527,6 +527,8 @@ public:
 enum ChannelOption {
     NO_DELAY,
     KEEP_ALIVE,
+    SEND_BUF_SIZE,
+    RECV_BUF_SIZE,
 };
 
 /**
@@ -555,8 +557,11 @@ protected:
     SocketAddress mLocalAddress {};
     SocketAddress mRemoteAddress {};
 
+    // connect() 调用时的原始域名和端口，用来设置 tls sni
     std::string mConnectHost;
     uint16_t mConnectPort = 0;
+
+    std::weak_ptr<Channel> mParent;
 
     static void setResult(bool ok, const PromisePtr<void> &promise) {
         if (promise == nullptr) {
@@ -575,7 +580,7 @@ protected:
 
     virtual void doConnect() = 0;
 
-    virtual void doOption(ChannelOption key, int value) = 0;
+    virtual void doOption(int key, void *value) = 0;
 
     virtual void doWrite(AnyPtr msg, PromisePtr<void> promise) = 0;
 
@@ -676,7 +681,11 @@ public:
         return mListenPromise->future();
     }
 
-    void option(ChannelOption key, int value) {
+    /**
+     * TODO：由于涉及到跨线程传递，此处的裸指针可能导致资源泄漏或指针悬垂，
+     * 最好传个值类型进来，比如 Any 什么。但是 Any 又有点太重了，不适合基础类型。
+     */
+    void option(int key, void *value) {
         if (mExecutor->inEventLoop()) {
             doOption(key, value);
             return;
@@ -725,6 +734,8 @@ public:
             }
         };
     }
+
+    ChannelPtr getParent() { return mParent.lock(); }
 };
 
 template <typename T>
@@ -750,7 +761,7 @@ public:
         return *this;
     }
 
-    Bootstrap &option(ChannelOption option, int value) {
+    Bootstrap &option(int option, void *value) {
         initAndRegister();
         mChannel->option(option, value);
         return *this;
