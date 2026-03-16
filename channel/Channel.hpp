@@ -524,12 +524,11 @@ public:
     bool isRemoved() const { return mState == State::REMOVED; }
 };
 
-enum ChannelOption {
-    NO_DELAY,
-    KEEP_ALIVE,
-    SEND_BUF_SIZE,
-    RECV_BUF_SIZE,
+struct ChannelOption {
 };
+
+struct KeepAlive { bool value; };
+struct NoDelay { bool value; };
 
 /**
  * 表示对端已经调用 shutdown 关闭了写入
@@ -681,19 +680,20 @@ public:
         return mListenPromise->future();
     }
 
-    /**
-     * TODO：由于涉及到跨线程传递，此处的裸指针可能导致资源泄漏或指针悬垂，
-     * 最好传个值类型进来，比如 Any 什么。但是 Any 又有点太重了，不适合基础类型。
-     */
-    void option(int key, void *value) {
-        if (mExecutor->inEventLoop()) {
-            doOption(key, value);
-            return;
-        }
-        mExecutor->post([self = mSelf, key, value] {
-            self->doOption(key, value);
-        });
-    }
+//    /**
+//     * TODO：由于涉及到跨线程传递，此处的裸指针可能导致资源泄漏或指针悬垂，
+//     * 最好传个值类型进来，比如 Any 什么。但是 Any 又有点太重了，不适合基础类型。
+//     */
+//    template<typename T>
+//    void option(T t) {
+//        if (mExecutor->inEventLoop()) {
+//            doOption(ChannelOption<T>().id(), &t.value);
+//            return;
+//        }
+//        mExecutor->post([self = mSelf, t] {
+//            self->doOption(ChannelOption<T>().id(), &t.value);
+//        });
+//    }
 
 //    不暴露 close()、write()、flush() 等函数，只能在 pipeline 里访问
 //    void close() {
@@ -761,11 +761,11 @@ public:
         return *this;
     }
 
-    Bootstrap &option(int option, void *value) {
-        initAndRegister();
-        mChannel->option(option, value);
-        return *this;
-    }
+//    Bootstrap &option(int option, void *value) {
+//        initAndRegister();
+//        mChannel->option(option, value);
+//        return *this;
+//    }
 
     Bootstrap &handler(ChannelHandlerPtr handler) {
         initAndRegister();
@@ -816,7 +816,7 @@ class ServerBootstrap {
     ChannelPtr mChannel;
     EventLoopPtr mExecutor;
 
-    std::vector<std::pair<ChannelOption, int>> mChildOption;
+    std::vector<std::pair<int, int>> mChildOption;
 
     void initAndRegister() {
         if (mChannel != nullptr) {

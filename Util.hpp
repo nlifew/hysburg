@@ -156,13 +156,14 @@ struct Net
         return false;
     }
 
-    static int copy(sockaddr_storage *out, const sockaddr *in)
+    static socklen_t copy(sockaddr_storage *out, const sockaddr *in)
     {
         if (in == nullptr) {
             return -1;
         }
-        memcpy(out, in, getSockLen(in->sa_family));
-        return 0;
+        auto len = getSockLen(in->sa_family);
+        memcpy(out, in, len);
+        return len;
     }
 
     static socklen_t getSockLen(int family)

@@ -43,12 +43,14 @@ add_library(
 
 target_link_libraries(
         runtime
-        lsquic
+        ngtcp2_static
+        ngtcp2_crypto_boringssl_static
         #        decrepit
         ssl
         crypto
         uv_a
         llhttp_static
+        z
 )
 
 add_executable(

@@ -78,6 +78,8 @@ public:
     }
 
     NO_COPY(ByteBuf);
+    ByteBuf(ByteBuf &&o) { swap(o); }
+    ByteBuf& operator=(ByteBuf&& o) { swap(o); return *this; }
 
     ~ByteBuf() { Allocator().free(mData); }
 
