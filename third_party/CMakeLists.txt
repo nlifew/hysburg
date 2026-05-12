@@ -32,7 +32,7 @@ FetchContent_MakeAvailable(boringssl)
 FetchContent_Declare(
         ngtcp2
         URL
-        "https://github.com/ngtcp2/ngtcp2/archive/refs/tags/v1.21.0.zip"
+        "https://github.com/ngtcp2/ngtcp2/archive/refs/tags/v1.22.1.zip"
 )
 set(ENABLE_LIB_ONLY ON CACHE INTERNAL "")
 set(ENABLE_SHARED_LIB OFF CACHE INTERNAL "")

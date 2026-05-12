@@ -14,6 +14,7 @@ add_compile_options(
         "-pthread"
         "-fno-exceptions"
         "-Wno-deprecated-declarations"
+        "-Wno-unused-parameter"
 #        "-fsanitize=address"
 #        "-fno-omit-frame-pointer"
 #        "-fsanitize=thread"

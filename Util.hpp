@@ -133,6 +133,10 @@ struct Net
         return inet_pton(AF_INET6, str, &addr) == 0;
     }
 
+    static bool equals(const sockaddr_storage *p, const sockaddr_storage *q) {
+        return equals(p, reinterpret_cast<const sockaddr*>(q));
+    }
+
     static bool equals(const sockaddr_storage *p, const sockaddr *q)
     {
         if (p == nullptr || q == nullptr) {
@@ -164,6 +168,10 @@ struct Net
         auto len = getSockLen(in->sa_family);
         memcpy(out, in, len);
         return len;
+    }
+
+    static socklen_t getSockLen(sockaddr_storage *storage) {
+        return storage ? getSockLen(storage->ss_family) : 0;
     }
 
     static socklen_t getSockLen(int family)

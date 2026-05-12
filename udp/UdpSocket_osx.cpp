@@ -3,7 +3,6 @@
 #define __APPLE_USE_RFC_3542
 #endif
 
-#include "Log.hpp"
 #include "UdpSocket.h"
 #include "UdpSocket_unix.hpp"
 
@@ -17,13 +16,12 @@ int UdpSocket::setRxqOvflEnabled(bool) {
 int UdpSocket::setMtuDiscoverEnabled(bool enabled) {
     (void) this;
     auto ret = -1;
-    switch (mFamily) {
-        case AF_INET:
-            ret = SET_SOCKET_OPTION(mFd, IPPROTO_IP, IP_DONTFRAG, enabled ? 1 : 0);
-            break;
-        case AF_INET6:
-            ret = SET_SOCKET_OPTION(mFd, IPPROTO_IPV6, IPV6_DONTFRAG, enabled ? 1 : 0);
-            break;
+
+    if ((mFlag & FLAG_AF_SPEC)) {
+        ret = SET_SOCKET_OPTION(mFd, IPPROTO_IP, IP_DONTFRAG, enabled ? 1 : 0);
+    }
+    if ((mFlag & FLAG_AF_SPEC6)) {
+        ret = SET_SOCKET_OPTION(mFd, IPPROTO_IPV6, IPV6_DONTFRAG, enabled ? 1 : 0);
     }
     return ret;
 }
