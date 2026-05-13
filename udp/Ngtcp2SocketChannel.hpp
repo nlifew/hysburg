@@ -24,8 +24,8 @@ enum class StreamMsgType {
 };
 
 struct StreamMsg {
-    StreamMsgType type;
-    int64_t streamId;
+    StreamMsgType type = StreamMsgType::OPEN;
+    int64_t streamId = INT64_MAX;
     ByteBuf byteBuf;
 };
 
@@ -55,6 +55,8 @@ class LinkedList {
     }
 
     T *doInsert(T *prev, T *value) {
+        assert(value->mPrev == nullptr && value->mNext == nullptr);
+
         auto *next = prev ? prev->mNext: mHead;
         value->mPrev = prev;
         value->mNext = next;
@@ -81,6 +83,15 @@ public:
     T *addLast(T *value) { return doInsert(mTail, value); }
 
     T *remove(T *value) { return doRemove(value); }
+
+    bool contains(T *value) {
+        for (auto it = mHead; it; it = it->mNext) {
+            if (it == value) {
+                return true;
+            }
+        }
+        return false;
+    }
 
     [[nodiscard]]
     T* first() { return mHead; }
@@ -130,6 +141,34 @@ struct Ngtcp2Thunk<MemFn> {
     }
 };
 
+
+class ReferenceCounter {
+    int mCount = 0;
+    std::function<void()> mPending;
+public:
+    ReferenceCounter() = default;
+    NO_COPY(ReferenceCounter)
+    ~ReferenceCounter() { CHECK(mCount == 0, "invalid state") }
+
+    template<typename T>
+    void doWhenZero(T func) {
+        if (mCount == 0) {
+            func();
+        } else {
+            mPending = std::move(func);
+        }
+    }
+
+    void operator()(int diff) {
+        if ((mCount += diff) != 0) {
+            return;
+        }
+        if (auto func = std::move(mPending); func != nullptr) {
+            func();
+        }
+    }
+};
+
 }
 
 struct Ngtcp2SocketChannel: public Channel {
@@ -137,21 +176,22 @@ struct Ngtcp2SocketChannel: public Channel {
     /**
      * ngtcp2 相关
      */
-   ngtcp2_conn *mConn = nullptr;
-   ngtcp2_ccerr mCCError {};
-   ngtcp2_settings mSettings {};
-   ngtcp2_callbacks mCallbacks {};
-   ngtcp2_transport_params mParams {};
+    ngtcp2_conn *mConn = nullptr;
+    ngtcp2_ccerr mCCError {};
+    ngtcp2_settings mSettings {};
+    ngtcp2_callbacks mCallbacks {};
+    ngtcp2_transport_params mParams {};
+    ngtcp2_cid mScid {}, mDicd {};
+    ngtcp2_path mPath {};
+    ngtcp2_crypto_conn_ref mConnRef {};
 
     /**
      * UDP 相关
      */
     UdpSocket mSocket;
-    ngtcp2_cid mScid {}, mDicd {};
-    ngtcp2_path mPath {};
-    ngtcp2_crypto_conn_ref mConnRef {};
     uv_timer_t mTimer {};
-    bool mIsTimerActive = false;
+    uv_timer_t mScheduleWriteTimer {};
+    internal::ReferenceCounter mUvCloser;
 
     struct {
         bool isBlocked = false;
@@ -172,14 +212,13 @@ struct Ngtcp2SocketChannel: public Channel {
     SSL_CTX *mSSLCtx = nullptr;
     std::unique_ptr<SSL, void(*)(SSL*)> mSSL { nullptr, SSL_free };
 
-
     /**
      * stream 管理
      */
     struct WriteOnce {
         ByteBuf byteBuf;
         PromisePtr<void> promise;
-        size_t originalSize = 0; // msg 的原始字节数
+        size_t originalReadIndex = 0; // byteBuf 备份下来的读指针
     };
 
     struct Stream {
@@ -188,13 +227,24 @@ struct Ngtcp2SocketChannel: public Channel {
 
         int64_t id = UINT64_MAX;
         Stream *mNext = nullptr, *mPrev = nullptr;
-
         int flags = 0;
 
-        // TODO 下面这个考虑换成环形队列
-        // TODO mPending 放在 Stream 维度可能会产生公平问题。即数据包的发送顺序完全依赖于 Stream 的遍历顺序
-        std::vector<WriteOnce> mPending;
-        std::vector<WriteOnce> mWriting;
+
+        // TODO mQueue 放在 Stream 维度可能会产生公平问题。即数据包的发送顺序完全依赖于 Stream 的遍历顺序
+        // [0, mWritingSize) 表示已写入未 ack 的部分;
+        // [mWriting, mQueue.size) 表示还未写入的部分
+        std::deque<WriteOnce> mQueue;
+        size_t mWritingSize = 0;
+
+        [[nodiscard]] size_t pendingSize() const { return mQueue.size() - mWritingSize; }
+        [[nodiscard]] size_t writingSize() const { return mWritingSize; }
+
+        WriteOnce &getWriting(size_t index) { return mQueue[index]; }
+        WriteOnce &getPending(size_t index) { return mQueue[mWritingSize + index]; }
+
+        void movePendingToWriting() { mWritingSize += 1; }
+        void popWriting() { mQueue.pop_front(); mWritingSize -= 1; }
+        WriteOnce &pushPending() { return mQueue.emplace_back(); }
     };
 
     std::map<int64_t, Stream> mStreamMap;
@@ -214,7 +264,7 @@ struct Ngtcp2SocketChannel: public Channel {
         ngtcp2_settings_default(&mSettings);
         mSettings.cc_algo = ngtcp2_cc_algo::NGTCP2_CC_ALGO_BBR;
         mSettings.initial_ts = uv_hrtime();
-        mSettings.handshake_timeout = 10 * NGTCP2_SECONDS; // 10s
+        mSettings.handshake_timeout = 10 * NGTCP2_SECONDS;
     }
 
     void initParams() {
@@ -224,6 +274,7 @@ struct Ngtcp2SocketChannel: public Channel {
         mParams.initial_max_stream_data_bidi_remote = 1 * 1024 * 1024;
         mParams.initial_max_streams_bidi = UINT32_MAX;
         mParams.grease_quic_bit = 1;
+        mParams.max_idle_timeout = 30 * NGTCP2_SECONDS;
 //        mParams.max_udp_payload_size = NGTCP2_MAX_UDP_PAYLOAD_SIZE;
     }
 
@@ -258,6 +309,12 @@ struct Ngtcp2SocketChannel: public Channel {
 
 #define X(NAME) mCallbacks.NAME = (internal::Ngtcp2Thunk<&Ngtcp2SocketChannel::on_##NAME>::invoke)
         X(handshake_confirmed);
+        X(recv_stream_data);
+        X(stream_open);
+        X(extend_max_stream_data);
+        X(acked_stream_data_offset);
+        X(stream_close);
+        // TODO 增加对 stream_reset 的支持
 #undef X
     }
 
@@ -268,9 +325,110 @@ struct Ngtcp2SocketChannel: public Channel {
         return 0;
     }
 
+    int on_stream_open(ngtcp2_conn *conn, int64_t stream_id, void *user_data) {
+        Stream stream {};
+        stream.id = stream_id;
+        mStreamMap.insert({ stream_id, std::move(stream) });
+
+        AnyPtr any;
+        auto msg = makeAnyIn<StreamMsg>(any);
+        msg->streamId = stream_id;
+        msg->type = StreamMsgType::OPEN;
+        mPipeline.fireChannelRead(std::move(any));
+        return 0;
+    }
+
+    int on_acked_stream_data_offset(
+            ngtcp2_conn *conn, int64_t stream_id,
+            uint64_t offset, uint64_t datalen,
+            void *user_data, void *stream_user_data
+    ) {
+        auto stream = findStreamById(stream_id);
+        if (stream == nullptr) {
+            return 0;
+        }
+        while (stream->writingSize() > 0) {
+            auto &byteBuf = stream->getWriting(0).byteBuf;
+            auto consumed = std::min(byteBuf.readableBytes(), (size_t) datalen);
+            byteBuf.offsetReader(consumed);
+            datalen -= consumed;
+            if (byteBuf.readableBytes() > 0) {
+                break;
+            }
+            stream->popWriting();
+        }
+        CHECK(datalen == 0, "impossible here")
+        return 0;
+    }
+
+    int on_recv_stream_data(
+            ngtcp2_conn *conn, uint32_t flags,
+            int64_t stream_id, uint64_t offset,
+            const uint8_t *data, size_t datalen,
+            void *user_data, void *stream_user_data
+    ) {
+        AnyPtr any;
+        auto msg = makeAnyIn<StreamMsg>(any);
+        msg->streamId = stream_id;
+        msg->type = StreamMsgType::READ;
+        msg->byteBuf.writeBytes(data, datalen);
+        mPipeline.fireChannelRead(std::move(any));
+
+        ngtcp2_conn_extend_max_stream_offset(conn, stream_id, datalen);
+        ngtcp2_conn_extend_max_offset(conn, datalen);
+        return 0;
+    }
+
+    /**
+     * 监听 extend_max_stream_data 回调，让被阻塞的流重新回到 sendQueue
+     */
+    int on_extend_max_stream_data(
+            ngtcp2_conn *conn,
+            int64_t stream_id,
+            uint64_t max_data, void *user_data,
+            void *stream_user_data
+    ) {
+        auto stream = findStreamById(stream_id);
+        if (stream == nullptr) {
+            return 0;
+        }
+        if (stream->flags & Stream::FLAG_BLOCKED) {
+            unblockStream(stream);
+            scheduleWrite();
+        }
+        return 0;
+    }
+
+    int on_stream_close(
+            ngtcp2_conn *conn, uint32_t flags,
+            int64_t stream_id, uint64_t app_error_code,
+            void *user_data, void *stream_user_data
+    ) {
+        if (auto stream = findStreamById(stream_id); stream != nullptr) {
+            if (stream->flags & Stream::FLAG_BLOCKED) {
+                mBlockedQueue.remove(stream);
+            } else {
+                mSendQueue.remove(stream);
+            }
+            // TODO 残留的 promise 怎么通知 ?
+        }
+        mStreamMap.erase(stream_id);
+
+        AnyPtr any;
+        auto msg = makeAnyIn<StreamMsg>(any);
+        msg->streamId = stream_id;
+        msg->type = StreamMsgType::CLOSE;
+        mPipeline.fireChannelRead(std::move(any));
+        return 0;
+    }
+
+
     void doRegister() override {
         mTimer.data = this;
         uv_timer_init(mExecutor->handle(), &mTimer);
+        
+        mScheduleWriteTimer.data = this;
+        uv_timer_init(mExecutor->handle(), &mScheduleWriteTimer);
 
         // 先不着急初始化 socket fd，延迟初始化至 bind/connect
 
@@ -479,13 +637,26 @@ struct Ngtcp2SocketChannel: public Channel {
                 break;
         }
         doClose();
-        // TODO 如果是握手期间发生了异常，需要通知上层
         return -1;
     }
 
     Stream *findStreamById(int64_t id) {
         auto it = mStreamMap.find(id);
         return it == mStreamMap.end() ? nullptr : &it->second;
+    }
+
+    /**
+     * 和 on_write 不同：设置一个定时器，在定时器中执行 on_write。
+     * 防止重入 ngtcp2
+     */
+    void scheduleWrite() {
+        if (uv_is_active(reinterpret_cast<uv_handle_t*>(&mScheduleWriteTimer))) {
+            return;
+        }
+        uv_timer_start(&mScheduleWriteTimer, [](uv_timer_t *timer) {
+            uv_timer_stop(timer);
+            static_cast<Ngtcp2SocketChannel*>(timer->data)->on_write();
+        }, 0, 0);
     }
 
     void on_write() {
@@ -504,7 +675,6 @@ struct Ngtcp2SocketChannel: public Channel {
         }
         update_timer();
     }
-
 
     void send_blocked_packet() {
         assert(mTx.isBlocked);
@@ -526,14 +696,7 @@ struct Ngtcp2SocketChannel: public Channel {
         mSocket.start(UdpSocket::FLAG_READABLE);
     }
 
-
     ssize_t write_close_frame() {
-        // 移除正在等待的未发送数据
-        if (mTx.isBlocked) {
-            mTx.isBlocked = false;
-            mSocket.start(UdpSocket::FLAG_READABLE);
-        }
-
         // 准备生成 CLOSE 帧
         std::array<uint8_t, NGTCP2_MAX_UDP_PAYLOAD_SIZE> dataArray; // NOLINT(*-pro-type-member-init)
 
@@ -581,13 +744,11 @@ struct Ngtcp2SocketChannel: public Channel {
             doClose();
             return -1;
         }
-        // TODO 是有必要把阻塞的流重新添加到 mSendQueue ?
         if (bytes > 0) {
             send_packet_or_blocked(data.first(bytes), gsoSize);
         }
         return bytes;
     }
-
 
     // ---- write_pkt 及其辅助函数 ----------------------------------------
 
@@ -607,23 +768,21 @@ struct Ngtcp2SocketChannel: public Channel {
         }
 
         auto stream = mSendQueue.removeFirst();
-        auto &pending = stream->mPending;
 
         std::span<ngtcp2_vec> vec = {
                 vecArray.data(),
-                std::min(vecArray.size(), pending.size()),
+                std::min(vecArray.size(), stream->pendingSize()),
         };
-        for (size_t i = 0; i < vec.size(); i += 1) {
-            auto &byteBuf = pending[i].byteBuf;
+        for (size_t i = 0; i < vec.size(); i++) {
+            auto &byteBuf = stream->getPending(i).byteBuf;
             vec[i] = {
                     .base = reinterpret_cast<uint8_t*>(byteBuf.readData()),
                     .len = byteBuf.readableBytes(),
             };
         }
 
-        // 如果是最后一条消息，且已经被上层关闭，则带上 FIN 标记
         uint32_t flag = NGTCP2_WRITE_STREAM_FLAG_MORE;
-        if ((stream->flags & Stream::FLAG_FIN) && vec.size() == pending.size()) {
+        if ((stream->flags & Stream::FLAG_FIN) && vec.size() == stream->pendingSize()) {
             flag |= NGTCP2_WRITE_STREAM_FLAG_FIN;
         }
         return { stream, vec, flag };
@@ -631,26 +790,24 @@ struct Ngtcp2SocketChannel: public Channel {
 
     /** stream 还有剩余数据时重新放回队头，等待下一轮写入。 */
     void requeueStream(Stream *stream) {
-        if (stream && !stream->mPending.empty()) {
+        if (stream && stream->pendingSize() > 0) {
             mSendQueue.addFirst(stream);
         }
     }
 
     /** 标记 stream 为 blocked 并移入 mBlockedQueue。 */
     void blockStream(Stream *stream) {
+        assert((stream->flags & Stream::FLAG_BLOCKED) == 0);
         stream->flags |= Stream::FLAG_BLOCKED;
+        mSendQueue.remove(stream);
         mBlockedQueue.addLast(stream);
     }
 
     /** 取消标记 stream 为 blocked，并从 mBlockedQueue 移除 */
     void unblockStream(Stream *stream) {
-        if ((stream->flags & Stream::FLAG_BLOCKED) == 0) {
-            return;
-        }
-        stream->flags &= ~Stream::FLAG_BLOCKED;
-
         // 理论上讲，这个 stream 一定在 mBlockedQueue 里
-        assert(stream->mPrev || stream->mNext);
+        assert(stream->flags & Stream::FLAG_BLOCKED);
+        stream->flags &= ~Stream::FLAG_BLOCKED;
         mBlockedQueue.remove(stream);
         mSendQueue.addLast(stream);
     }
@@ -673,11 +830,10 @@ struct Ngtcp2SocketChannel: public Channel {
                     vec.data(), vec.size(), ts
             );
             movePendingToWriting(stream, datalen);
+            requeueStream(stream);
 
             switch (bytes) {
                 case NGTCP2_ERR_WRITE_MORE:
-                    // 当前 QUIC 包还有剩余空间，重新入队继续打包
-                    requeueStream(stream);
                     continue;
 
                 case NGTCP2_ERR_STREAM_DATA_BLOCKED:
@@ -697,43 +853,30 @@ struct Ngtcp2SocketChannel: public Channel {
                 ngtcp2_ccerr_set_liberr(&mCCError, bytes, nullptr, 0);
                 return NGTCP2_ERR_CALLBACK_FAILURE;
             }
-            // bytes >= 0：包已满或无数据可写，若 stream 有剩余则重新入队
-            requeueStream(stream);
             return bytes;
         }
     }
 
-
-    static void movePendingToWriting(Stream *stream, ssize_t datalen) {
+    void movePendingToWriting(Stream *stream, ssize_t datalen) {
         if (datalen <= 0 || stream == nullptr) {
             return;
         }
-
-        auto &pending = stream->mPending;
-        auto &writing = stream->mWriting;
-
-        auto findIt = pending.begin();
-        for (; findIt != pending.end() && datalen > 0; ++findIt) {
-            auto &byteBuf = findIt->byteBuf;
+        while (stream->pendingSize() > 0) {
+            auto &once = stream->getPending(0);
+            auto &byteBuf = once.byteBuf;
             auto consumed = std::min(byteBuf.readableBytes(), (size_t) datalen);
             datalen -= consumed;
             byteBuf.offsetReader(consumed);
 
             if (byteBuf.readableBytes() > 0) {
-                break; // 当前 buffer 还没用完，说明 datalen 已经归零，停止查找
+                break;
             }
+            // 全部消耗完：还原读指针供 ack 追踪，回调 promise，推进边界
+            byteBuf.readIndex(once.originalReadIndex);
+            stream->movePendingToWriting();
+            setResult(true, once.promise);
         }
-        // 最后 datalen 一定是0，不可能出现消耗掉的比可用的多的情况
         CHECK(datalen == 0, "impossible here")
-
-        // TODO 把 promise 移动到 writing
-        // TODO 还原 originalSize
-        writing.insert(
-                writing.end(),
-                std::make_move_iterator(pending.begin()),
-                std::make_move_iterator(findIt)
-        );
-        pending.erase(pending.begin(), findIt);
     }
 
 
@@ -764,7 +907,7 @@ struct Ngtcp2SocketChannel: public Channel {
             for (size_t i = 0; i < n; ++i) {
                 iovecArray[i] = {
                         .iov_base = data.data() + i * geoSize,
-                        .iov_len = geoSize,
+                        .iov_len = std::min(geoSize, data.size() - i * geoSize),
                 };
             }
 
@@ -778,7 +921,6 @@ struct Ngtcp2SocketChannel: public Channel {
         }
         return data;
     }
-
 
     void send_packet_or_blocked(std::span<uint8_t> data, size_t geoSize) {
         auto rest = send_packet(data, geoSize);
@@ -796,9 +938,23 @@ struct Ngtcp2SocketChannel: public Channel {
     }
 
     void update_timer() {
+        // CLOSING/DRAINING 期间，ngtcp2_conn_get_expiry() 的值仅用于触发 CONNECTION_CLOSE 重传，
+        // 而重传已由 on_read() -> on_write() -> write_close_frame() 覆盖，无需依赖定时器。
+        // 按照 RFC 9000 §10.2 的建议，等待 3×PTO 后直接调用 onConnClose() 清理连接状态。
+        if (ngtcp2_conn_in_closing_period(mConn) || ngtcp2_conn_in_draining_period(mConn)) {
+            auto delay = std::max(3 * ngtcp2_conn_get_pto(mConn) / NGTCP2_MILLISECONDS, (uint64_t) 500);
+            LOGD("next tick: %llu ms. (conn is in closing/draining)", delay);
+
+            uv_timer_start(&mTimer, [](uv_timer_t *handle) {
+                static_cast<Ngtcp2SocketChannel*>(handle->data)->onConnClose();
+            }, delay, 0);
+            return;
+        }
+
         const auto expiry = ngtcp2_conn_get_expiry(mConn);
         if (expiry == UINT64_MAX) {
-            LOGD("ngtcp2_conn_get_expiry() == UINT64_MAX, nothing to do");
+            LOGD("ngtcp2_conn_get_expiry() == UINT64_MAX, cancel timer");
+            uv_timer_stop(&mTimer);
             return;
         }
 
@@ -812,12 +968,8 @@ struct Ngtcp2SocketChannel: public Channel {
         }
         // [1]. 向上取整，防止多次自旋。libuv 可能会在定时器到达之前就唤醒 timeout，
         // 如果不取整，diff 是 0，会在下次事件循环中立即调用 timeout，一直自旋直到时间真的到达
-
-        mIsTimerActive = true;
         uv_timer_start(&mTimer, [](uv_timer_t *handle) {
-            auto self = static_cast<Ngtcp2SocketChannel*>(handle->data);
-            self->mIsTimerActive = false;
-            self->onTimeout();
+            static_cast<Ngtcp2SocketChannel*>(handle->data)->onTimeout();
         }, diff, 0);
     }
 
@@ -850,7 +1002,80 @@ struct Ngtcp2SocketChannel: public Channel {
     }
 
     void doWrite(AnyPtr msg, PromisePtr<void> promise) override {
-        /* no-op */
+        if (UNLIKELY(!msg->is<StreamMsg>())) {
+            LOGE("unknown message type '%s', expected '%s'", msg->type.name(), typeid(StreamMsg).name());
+            setResult(false, promise);
+            return;
+        }
+        auto *streamMsg = msg->as<StreamMsg>();
+        switch (streamMsg->type) {
+            case StreamMsgType::OPEN:
+                doOpenStream(promise);
+                break;
+            case StreamMsgType::READ:
+                setResult(false, promise);
+                break;
+            case StreamMsgType::WRITE:
+                doWriteStream(streamMsg->streamId, streamMsg->byteBuf, promise);
+                break;
+            case StreamMsgType::FLUSH:
+                doFlushStream(promise);
+                break;
+            case StreamMsgType::CLOSE:
+                doCloseStream(streamMsg->streamId, promise);
+                break;
+        }
+    }
+
+    int64_t doOpenStream(PromisePtr<void> &promise) {
+        int64_t streamId = -1;
+        auto ret = ngtcp2_conn_open_bidi_stream(mConn, &streamId, this);
+        if (ret != 0) {
+            setResult(false, promise);
+            return INT64_MAX;
+        }
+        on_stream_open(mConn, streamId, this);
+        setResult(true, promise);
+        return streamId;
+    }
+
+    void doWriteStream(int64_t streamId, ByteBuf &msg, PromisePtr<void> &promise) {
+        auto stream = findStreamById(streamId);
+        if (stream == nullptr) {
+            setResult(false, promise);
+            return;
+        }
+        if (msg.readableBytes() <= 0) {
+            setResult(true, promise);
+            return;
+        }
+        auto &once = stream->pushPending();
+        once.promise = promise;
+        once.originalReadIndex = msg.readIndex();
+        once.byteBuf = std::move(msg);
+
+        if ((stream->flags & Stream::FLAG_BLOCKED) == 0 && !mSendQueue.contains(stream)) {
+            mSendQueue.addLast(stream);
+        }
+    }
+
+    void doFlushStream(PromisePtr<void> &promise) {
+        scheduleWrite();
+        setResult(true, promise);
+    }
+
+    void doCloseStream(int64_t streamId, PromisePtr<void> &promise) {
+        auto stream = findStreamById(streamId);
+        if (stream == nullptr) {
+            setResult(false, promise);
+            return;
+        }
+        stream->flags |= Stream::FLAG_FIN;
+        if ((stream->flags & Stream::FLAG_BLOCKED) == 0 && !mSendQueue.contains(stream)) {
+            mSendQueue.addLast(stream);
+        }
+        scheduleWrite();
+        setResult(true, promise);
     }
 
     void doFlush() override {
@@ -863,9 +1088,15 @@ struct Ngtcp2SocketChannel: public Channel {
             LOGD("ngtcp2.conn == nullptr, close channel directly");
             return;
         }
-        if (write_close_frame() > 0) {
-            update_timer();
+
+        // 移除正在等待的未发送数据
+        if (mTx.isBlocked) {
+            mTx.isBlocked = false;
+            mSocket.start(UdpSocket::FLAG_READABLE);
         }
+
+        write_close_frame();
+        update_timer();
     }
 
     void onConnClose() {
@@ -876,15 +1107,24 @@ struct Ngtcp2SocketChannel: public Channel {
             ngtcp2_conn_del(mConn);
             mConn = nullptr;
         }
+        mSocket.close();
+
+        // 关闭定时器
+        std::array<uv_timer_t*, 2> handles = { &mTimer, &mScheduleWriteTimer };
+        mUvCloser(handles.size());
+        mUvCloser.doWhenZero([this]() { mSelf.reset(); });
+        for (const auto it : handles) {
+            uv_timer_stop(it);
+            uv_close(reinterpret_cast<uv_handle_t*>(it), [](uv_handle_t *handle) {
+                static_cast<Ngtcp2SocketChannel*>(handle->data)->mUvCloser(-1);
+            });
+        }
+
         // 关闭整条流水线
         if (mPipeline.isActive()) {
             mPipeline.fireChannelInactive();
         }
         mPipeline.removeAllHandlers();
-
-        // 关闭定时器和 udp socket
-        uv_timer_stop(&mTimer);
-        mSocket.close();
 
         // 如果正在连接中，报告连接失败
         if (!mConnectPromise->retain().isDone()) {
