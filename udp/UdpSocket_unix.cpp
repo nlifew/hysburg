@@ -96,6 +96,14 @@ int UdpSocket::setSocketBuffSize(int bufSize) {
     return ret;
 }
 
+int UdpSocket::setSendBufSize(int bufSize) {
+    return SET_SOCKET_OPTION(mFd, SOL_SOCKET, SO_SNDBUF, bufSize);
+}
+
+int UdpSocket::setRecvBufSize(int bufSize) {
+    return SET_SOCKET_OPTION(mFd, SOL_SOCKET, SO_RCVBUF, bufSize);
+}
+
 int UdpSocket::setNonBlocking(bool nonBlocking) {
     (void) this;
     auto ret = -1;

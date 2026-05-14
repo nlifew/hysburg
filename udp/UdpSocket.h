@@ -117,6 +117,8 @@ public:
     }
 
     int setSocketBuffSize(int bufSize);
+    int setSendBufSize(int bufSize);
+    int setRecvBufSize(int bufSize);
 //    int setGsoEnabled(bool enabled);
 //    int setGroEnabled(bool enabled);
     int setEcnEnabled(bool enabled);

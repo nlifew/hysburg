@@ -17,8 +17,24 @@
 
 namespace hysburg {
 
-enum Ngtcp2ChannelOption {
+// option 表：(类型，名字)
+#define NGTCP2_OPTIONS(X) \
+    X(SSL_CTX*,     SSL_CTX) \
+    X(std::string,  ALPN) \
+    X(int,          SEND_BUF_SIZE) \
+    X(int,          RECV_BUF_SIZE)
+
+enum class Ngtcp2ChannelOption {
+#define X(TYPE, NAME) NAME,
+    NGTCP2_OPTIONS(X)
+#undef X
 };
+
+template<Ngtcp2ChannelOption K> struct Ngtcp2OptionTrait;
+#define X(TYPE, NAME) \
+    template<> struct Ngtcp2OptionTrait<Ngtcp2ChannelOption::NAME> { using type = TYPE; };
+NGTCP2_OPTIONS(X)
+#undef X
 
 enum class StreamMsgType {
     OPEN, READ, WRITE, FLUSH, CLOSE
@@ -922,8 +938,32 @@ struct Ngtcp2SocketChannel: public Channel {
         doClose();
     }
 
-    void doOption(int key, void *value) override {
+    void doOption(int key, void *value) override { /* superseded by setOption<K>() */ }
 
+    template<Ngtcp2ChannelOption K>
+    void applyOption(typename Ngtcp2OptionTrait<K>::type value) {
+        if constexpr (K == Ngtcp2ChannelOption::SSL_CTX) {
+            mSSLCtx = value;
+        }
+        if constexpr (K == Ngtcp2ChannelOption::ALPN) {
+            setAlpn(value);
+        }
+        if constexpr (K == Ngtcp2ChannelOption::SEND_BUF_SIZE) {
+            mSocket.setSendBufSize(value);
+        }
+        if constexpr (K == Ngtcp2ChannelOption::RECV_BUF_SIZE) {
+            mSocket.setRecvBufSize(value);
+        }
+    }
+
+    int setAlpn(std::string_view alpn) {
+        if (alpn.size() > UINT8_MAX) {
+            return -1;
+        }
+        mAlpn.clear();
+        mAlpn.push_back(static_cast<uint8_t>(alpn.size()));
+        mAlpn.insert(mAlpn.end(), alpn.begin(), alpn.end());
+        return 0;
     }
 
     void doListen(int backlog) override {
@@ -1068,14 +1108,16 @@ public:
     Ngtcp2SocketChannel() = default;
     NO_COPY(Ngtcp2SocketChannel)
 
-    int setAlpn(std::string_view alpn) {
-        if (alpn.size() > UINT8_MAX) {
-            return -1;
+    template<Ngtcp2ChannelOption K>
+    void setOption(typename Ngtcp2OptionTrait<K>::type value) {
+        if (mExecutor->inEventLoop()) {
+            applyOption<K>(std::move(value));
+            return;
         }
-        mAlpn.clear();
-        mAlpn.push_back(static_cast<uint8_t>(alpn.size()));
-        mAlpn.insert(mAlpn.end(), alpn.begin(), alpn.end());
-        return 0;
+        mExecutor->post([_self = mSelf, v = std::move(value)]() mutable {
+            auto self = static_cast<Ngtcp2SocketChannel*>(_self.get()); // NOLINT(*-pro-type-static-cast-downcast)
+            self->template applyOption<K>(std::move(v));
+        });
     }
 };
 
