@@ -709,7 +709,7 @@ struct Ngtcp2SocketChannel: public Channel {
             LOGD("send CLOSE frame failed (%s)", ngtcp2_strerror(ret));
         }
         if (ret > 0) {
-            send_packet({ dataArray.data(), static_cast<size_t>(ret) }, ret);
+            send_packet_or_blocked({ dataArray.data(), static_cast<size_t>(ret) }, ret);
             LOGD("send CLOSE frame ok (%td bytes)", ret);
         }
         if (ret == 0) {
@@ -1088,13 +1088,15 @@ struct Ngtcp2SocketChannel: public Channel {
             LOGD("ngtcp2.conn == nullptr, close channel directly");
             return;
         }
-
+        // 如果正在关闭中，理论上不需要再次执行。也是为了防止把 CLOSE 帧从 mTX 里错误删除
+        if (ngtcp2_conn_in_closing_period(mConn) || ngtcp2_conn_in_draining_period(mConn)) {
+            return;
+        }
         // 移除正在等待的未发送数据
         if (mTx.isBlocked) {
             mTx.isBlocked = false;
             mSocket.start(UdpSocket::FLAG_READABLE);
         }
-
         write_close_frame();
         update_timer();
     }
