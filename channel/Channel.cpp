@@ -69,6 +69,6 @@ namespace hysburg {
 }
 
 void ChannelPipeline::initHeadAndTail() {
-    doInsert(mTail, "HeadHandler", std::make_shared<HeadHandler>());
-    doInsert(mTail, "TailHandler", std::make_shared<TailHandler>());
+    doInsert(mList.last(), "HeadHandler", std::make_shared<HeadHandler>());
+    doInsert(mList.last(), "TailHandler", std::make_shared<TailHandler>());
 }

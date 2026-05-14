@@ -9,6 +9,7 @@
 #include "Any.hpp"
 #include "ByteBuf.hpp"
 #include "Future.hpp"
+#include "util/LinkedList.hpp"
 
 namespace hysburg {
 
@@ -187,6 +188,7 @@ public:
 
 class ChannelHandlerContext {
     friend class ChannelPipeline;
+    friend class LinkedList<ChannelHandlerContext>;
 
     ChannelHandlerContext *mPrev = nullptr;
     ChannelHandlerContext *mNext = nullptr;
@@ -332,8 +334,7 @@ public:
  */
 class ChannelPipeline {
     std::list<ChannelHandlerContext*> mPending;
-    ChannelHandlerContext *mHead = nullptr;
-    ChannelHandlerContext *mTail = nullptr;
+    LinkedList<ChannelHandlerContext> mList;
     Channel *mChannel = nullptr;
     EventLoopPtr mExecutor = nullptr;
 
@@ -360,20 +361,8 @@ class ChannelPipeline {
         ctx->mName.swap(name);
         ctx->mHandler.swap(handler);
 
-        auto *next = prev ? prev->mNext: mHead;
-        ctx->mPrev = prev;
-        ctx->mNext = next;
+        mList.insertAfter(prev, ctx);
 
-        if (prev == nullptr) {
-            mHead = ctx;
-        } else {
-            prev->mNext = ctx;
-        }
-        if (next == nullptr) {
-            mTail = ctx;
-        } else {
-            next->mPrev = ctx;
-        }
         if (mState == State::INIT) {
             mPending.push_back(ctx);
             return;
@@ -382,20 +371,11 @@ class ChannelPipeline {
     }
 
     void doRemove(ChannelHandlerContext *ctx) {
-        // 从双向链表中删除
-        auto prev = ctx->mPrev;
-        auto next = ctx->mNext;
-
-        if (prev != nullptr) { prev->mNext = next; }
-        if (next != nullptr) { next->mPrev = prev; }
-        if (ctx == mHead) { mHead = next; }
-        if (ctx == mTail) { mTail = prev; }
-
         // 先保留 ctx->mPrev 和 ctx->mNext，这样这个 ctx 仍然能向前/向后发送数据
-        // ctx->mPrev = ctx->mNext = nullptr;
+        mList.unlink(ctx);
         if (mState == State::INIT) {
             auto it = std::find(mPending.begin(), mPending.end(), ctx);
-            if (it != mPending.end()) { mPending.erase(it);}
+            if (it != mPending.end()) { mPending.erase(it); }
             return;
         }
         ctx->callHandlerRemoved();
@@ -425,13 +405,13 @@ public:
 
     ChannelPipeline &addLast(std::string name, ChannelHandlerPtr handler) {
         CHECK(mExecutor->inEventLoop(), "cross thread call is DISABLED")
-        doInsert(mTail->mPrev, std::move(name), std::move(handler));
+        doInsert(mList.last()->mPrev, std::move(name), std::move(handler));
         return *this;
     }
 
     void remove(ChannelHandler *handler) {
         CHECK(mExecutor->inEventLoop(), "cross thread call is DISABLED")
-        for (auto i = mHead; i != nullptr; i = i->mNext) {
+        for (auto i = mList.first(); i != nullptr; i = i->mNext) {
             if (i->mHandler.get() == handler) {
                 doRemove(i);
                 break;
@@ -459,8 +439,8 @@ public:
               "invalid state: '%d'", mState)
         mState = State::REMOVED;
 
-        while (mHead != nullptr) {
-            doRemove(mHead);
+        while (!mList.empty()) {
+            doRemove(mList.first());
         }
     }
 
@@ -468,25 +448,25 @@ public:
         CHECK(mExecutor->inEventLoop(), "cross thread call is DISABLED")
         CHECK(mState == State::ADDED, "invalid state: '%d'", mState)
         mState = State::ACTIVE;
-        mHead->callChannelActive();
+        mList.first()->callChannelActive();
     }
 
     void fireChannelRead(AnyPtr msg) {
         CHECK(mExecutor->inEventLoop(), "cross thread call is DISABLED")
         CHECK(mState == State::ACTIVE, "invalid state: '%d'", mState)
-        mHead->callChannelRead(std::move(msg));
+        mList.first()->callChannelRead(std::move(msg));
     }
 
     void fireChannelInactive() {
         CHECK(mExecutor->inEventLoop(), "cross thread call is DISABLED")
         CHECK(mState == State::ACTIVE, "invalid state: '%d'", mState)
         mState = State::INACTIVE;
-        mHead->callChannelInactive();
+        mList.first()->callChannelInactive();
     }
 
     void fireUserEvent(AnyPtr msg) {
         CHECK(mExecutor->inEventLoop(), "cross thread call is DISABLED")
-        mHead->callUserEvent(std::move(msg));
+        mList.first()->callUserEvent(std::move(msg));
     }
 
     void writeAndFlush(AnyPtr msg) {
@@ -501,20 +481,20 @@ public:
     void write(AnyPtr msg, PromisePtr<void> promise) {
         CHECK(mExecutor->inEventLoop(), "cross thread call is DISABLED")
         CHECK(mState == State::ACTIVE, "invalid state: '%d'", mState)
-        mTail->callWrite(std::move(msg), std::move(promise));
+        mList.last()->callWrite(std::move(msg), std::move(promise));
     }
 
     void flush() {
         CHECK(mExecutor->inEventLoop(), "cross thread call is DISABLED")
         CHECK(mState == State::ACTIVE, "invalid state: '%d'", mState)
-        mTail->callFlush();
+        mList.last()->callFlush();
     }
 
     void close() {
         CHECK(mExecutor->inEventLoop(), "cross thread call is DISABLED")
         // 按理说此时应该有其他别的状态的
 //        CHECK(mState == State::ACTIVE, "invalid state: '%d'", mState)
-        mTail->callClose();
+        mList.last()->callClose();
     }
 
     [[nodiscard]]

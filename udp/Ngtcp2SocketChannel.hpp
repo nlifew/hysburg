@@ -10,6 +10,7 @@
 #include <ngtcp2/ngtcp2_crypto_boringssl.h>
 
 #include "Util.hpp"
+#include "util/LinkedList.hpp"
 #include "channel/EventLoop.hpp"
 #include "channel/Channel.hpp"
 #include "udp/UdpSocket.h"
@@ -30,78 +31,6 @@ struct StreamMsg {
 };
 
 namespace internal {
-
-/**
- * 侵入式链表
- * @tparam T
- */
-template<typename T>
-class LinkedList {
-    T *mHead = nullptr;
-    T *mTail = nullptr;
-
-    T *doRemove(T *value) {
-        auto prev = value->mPrev;
-        auto next = value->mNext;
-
-        if (prev != nullptr) { prev->mNext = next; }
-        if (next != nullptr) { next->mPrev = prev; }
-
-        if (value == mHead) { mHead = next; }
-        if (value == mTail) { mTail = prev; }
-
-        value->mPrev = value->mNext = nullptr;
-        return value;
-    }
-
-    T *doInsert(T *prev, T *value) {
-        assert(value->mPrev == nullptr && value->mNext == nullptr);
-
-        auto *next = prev ? prev->mNext: mHead;
-        value->mPrev = prev;
-        value->mNext = next;
-
-        if (prev == nullptr) {
-            mHead = value;
-        } else {
-            prev->mNext = value;
-        }
-        if (next == nullptr) {
-            mTail = value;
-        } else {
-            next->mPrev = value;
-        }
-        return value;
-    }
-
-public:
-    explicit LinkedList() = default;
-    NO_COPY(LinkedList)
-
-    T* removeFirst() { return empty() ? nullptr : doRemove(mHead); }
-    T* addFirst(T *value) { return doInsert(nullptr, value); }
-    T *addLast(T *value) { return doInsert(mTail, value); }
-
-    T *remove(T *value) { return doRemove(value); }
-
-    bool contains(T *value) {
-        for (auto it = mHead; it; it = it->mNext) {
-            if (it == value) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    [[nodiscard]]
-    T* first() { return mHead; }
-
-    [[nodiscard]]
-    const T* first() const { return mHead; }
-
-    [[nodiscard]]
-    bool empty() const { return mHead == nullptr; }
-};
 
 // 编译期雷达：在变长参数列表 Args... 中，找到第一个 void* 的索引位置
 template <typename... Args>
@@ -252,13 +181,13 @@ struct Ngtcp2SocketChannel: public Channel {
     /**
      * 有数据等待发送的 Stream 集合
      */
-    internal::LinkedList<Stream> mSendQueue;
+    LinkedList<Stream> mSendQueue;
 
     /**
      * 因为各种原因，虽然有数据等待发送，但被跳过的 Stream 集合
      * 比如触发 stream 流控
      */
-    internal::LinkedList<Stream> mBlockedQueue;
+    LinkedList<Stream> mBlockedQueue;
 
     void initSettings() {
         ngtcp2_settings_default(&mSettings);
